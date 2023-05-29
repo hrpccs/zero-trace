@@ -1,0 +1,10 @@
+*.o
+*.bin
+*.a
+*.pc
+src/include/vmlinux.h
+src/include/*.skel.h
+src/libbpf
+.vscode/
+tmp/
+*.log
