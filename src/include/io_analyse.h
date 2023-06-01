@@ -20,6 +20,10 @@ public:
     std::filesystem::path& output_path = config.output_path;
     if (!output_path.empty()) {
       outputFile = fopen(output_path.c_str(), "w");
+      if(outputFile == nullptr) {
+        printf("IOEndHandler: open output file failed\n");
+        outputFile = stdout;
+      }
     } else {
       outputFile = stdout;
     }
@@ -45,6 +49,7 @@ public:
   void EndRequest(int idx) {
     std::unique_ptr<IORequest> request = std::move(pending_requests[idx]);
     pending_requests.erase(pending_requests.begin() + idx);
+    printf("IOAnalyser: request %lld end\n", request->id);
     Analyser::DoneRequest(std::move(request));
   }
 

@@ -5,3 +5,6 @@ cmake_minimum_required(VERSION 3.0)
 project(iotracer)
 
 add_subdirectory(src)
+
+# produce compile_commands.json
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

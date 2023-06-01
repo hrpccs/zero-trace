@@ -68,3 +68,5 @@ add_custom_command(
 
 
 
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

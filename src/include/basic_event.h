@@ -13,7 +13,7 @@
 class Event {
 public:
   Event() {}
-  ~Event() {}
+  virtual ~Event() {}
   // virtual void print() = 0;
   virtual void printfmt(FILE *) = 0;
   //   char comm[MAX_COMM_LEN];

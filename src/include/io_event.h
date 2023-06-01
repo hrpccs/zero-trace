@@ -80,6 +80,7 @@ public:
       Request::AddEvent(std::move(ad));
     }
     if (auto ad = dynamic_cast<BlockPendingDuration *>(events.back().get())) {
+      printf("add bio\n");
       ad->relative_bio.insert(bio);
     } else {
       assert(false);
