@@ -53,31 +53,17 @@ static void sig_handler(int sig) {
 int once = 0;
 
 static int handle_event(void *ctx, void *data, size_t data_sz) {
+  if(data_sz == sizeof(bvec_array_info)){
+    struct bvec_array_info* bvec_info = (struct bvec_array_info*)data;
+    printf("bvec cnt %d\n",bvec_info->bvec_cnt);
+    
+  }
   struct event *e = (struct event *)data;
   if (e->pid == curr_pid || e->tid == curr_pid) {
     return 0;
   }
   const char *event_type_str = kernel_hook_type_str[e->event_type];
   const char *layer_type_str = info_type_str[e->info_type];
-  if (e->info_type == vfs_layer) {
-    fprintf(output_file,
-            "ts=%lld pid=%d tid=%d comm=%s layer=%s type=%s, inode=%llx, "
-            "offset=%lu, size=%lu\n",
-            e->timestamp, e->pid, e->tid, e->comm, layer_type_str,
-            event_type_str, e->vfs_layer_info.inode,
-            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes);
-  } else if (e->info_type == bio_info) {
-    fprintf(
-        output_file, "type %s 	bio:%llx	dev %ld, bvec cnt 	%d\n",
-        event_type_str, e->bio_info.bio, e->bio_info.dev, e->bio_info.bvec_cnt);
-    for (int i = 0; i < e->bio_info.bvec_cnt; i++) {
-      fprintf(output_file,
-              "				inode=%llx, offset=%llu, size=%llu\n",
-              e->bio_info.bvecs[i].inode, e->bio_info.bvecs[i].bv_offset,
-              e->bio_info.bvecs[i].bv_len);
-    }
-  } else {
-  }
   return 0;
 }
 
@@ -85,11 +71,7 @@ IOAnalyser *analyser;
 unsigned long long Request::request_id = 0;
 
 static int analyse(void *ctx, void *data, size_t data_sz) {
-  struct event *e = (struct event *)data;
-  if (e->pid == curr_pid || e->tid == curr_pid) {
-    return 0;
-  }
-  analyser->AddTrace(e);
+  analyser->AddTrace(data,data_sz);
   return 0;
 }
 

@@ -7,29 +7,32 @@
 
 struct bvec {
   unsigned long long inode;
+  unsigned long long index;
   unsigned long long bv_len;
   unsigned long long bv_offset;
 };
-struct bvecArray {
+struct bvec_array_info {
+  unsigned long long bio;
+  enum info_type info_type;
   struct bvec bvecs[MAX_BVEC_PER_BIO];
   unsigned int bvec_cnt;
 };
 
 enum bio_info_type {
-  queue_bio,
+  queue_first_bio,
   split_bio,
   comm_bio,
 };
 
 struct event {
   long long timestamp;
+  int pid;
+  int tid;
   enum kernel_hook_type event_type;
   enum info_type info_type;
   char comm[MAX_COMM_LEN];
   union {
     struct {
-      int pid;
-      int tid;
       unsigned long dev;
       unsigned long long inode;
       unsigned long long dir_inode;
@@ -47,18 +50,18 @@ struct event {
     struct {
       unsigned long dev;
       unsigned long long rq;
-      unsigned long long request_queue; 
+      unsigned long long request_queue;
     } rq_info; // 对于单一 request 的事件，如创建、释放
     struct {
       unsigned long dev;
       unsigned long long bio;
       unsigned long long rq;
+      unsigned long long request_queue;
     } bio_rq_association_info; // 对于 bio 和 request 关联的事件，add, remove,
                                // merge
     struct {
       unsigned long dev;
-      unsigned long long rq;
-      unsigned long long plug;
+      unsigned long long request_queue;
       unsigned short plug_or_unplug;
     } rq_plug_info; // 对于 request 的 plug 和 unplug 事件
   };

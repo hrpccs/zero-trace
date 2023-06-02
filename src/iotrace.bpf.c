@@ -15,12 +15,6 @@ struct {
   __uint(max_entries, 1 << 16);
 } rb SEC(".maps");
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, unsigned long long);
-  __type(value, struct bvecArray);
-  __uint(max_entries, 1 << 10);
-} bvecArrayMap SEC(".maps");
 
 unsigned int target_tgid = 0;                   // pid
 unsigned int target_tid = 0;                    // tid
@@ -296,28 +290,25 @@ static inline bool rq_is_passthrough(unsigned int rq_cmd_flags) {
   return false;
 }
 
-static inline void set_rq_complete_info(struct event *task_info,
-                                        struct request *rq, dev_t dev,
-                                        unsigned int nr_bytes) {
-}
-
 static inline void set_rq_comm_info(struct event *task_info, struct request *rq,
                                     dev_t dev) {
   task_info->rq_info.dev = dev;
-  int bio_cnt = 0;
-  struct bio *bio = BPF_CORE_READ(rq, bio);
-  for (int i = 0; i < MAX_BIO_PER_RQ; i++) {
-    if (bio == NULL) {
-      break;
-    }
-    int bio_flag = BPF_CORE_READ(bio, bi_flags);
-    if (bio_flag & BIO_TRACE_MASK) {
-      bio_cnt++;
-      task_info->rq_info.relative_bios[i] = (unsigned long long)bio;
-    }
-    bio = BPF_CORE_READ(bio, bi_next);
-  }
-  task_info->rq_info.relative_bio_cnt = bio_cnt;
+  task_info->rq_info.rq = (unsigned long long)rq;
+  task_info->rq_info.request_queue = (unsigned long long)BPF_CORE_READ(rq,q);
+  // int bio_cnt = 0;
+  // struct bio *bio = BPF_CORE_READ(rq, bio);
+  // for (int i = 0; i < MAX_BIO_PER_RQ; i++) {
+  //   if (bio == NULL) {
+  //     break;
+  //   }
+  //   int bio_flag = BPF_CORE_READ(bio, bi_flags);
+  //   if (bio_flag & BIO_TRACE_MASK) {
+  //     bio_cnt++;
+  //     task_info->rq_info.relative_bios[i] = (unsigned long long)bio;
+  //   }
+  //   bio = BPF_CORE_READ(bio, bi_next);
+  // }
+  // task_info->rq_info.relative_bio_cnt = bio_cnt;
 }
 
 
@@ -346,25 +337,6 @@ static inline void set_split_bio_info(struct event *task_info, struct bio *bio,
   task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
 }
 
-static inline void set_queue_bio_info(struct event *task_info, struct bio *bio,
-                                       dev_t dev) {
-  task_info->bio_info.bio = (unsigned long long)bio;
-  task_info->bio_info.dev = dev;
-  task_info->bio_info.bio_info_type = queue_bio;
-  unsigned int bvec_cnt = BPF_CORE_READ(bio, bi_vcnt);
-  struct bvecArray bvecs = {};
-  bvecs.bvec_cnt = bvec_cnt;
-  struct bio_vec *bv = BPF_CORE_READ(bio, bi_io_vec);
-  for (int i = 0; i < (bvec_cnt & MAX_BVEC_PER_BIO); i++) {
-    struct bio_vec *v = bv + i;
-    struct page *p = BPF_CORE_READ(v, bv_page);
-    bvecs.bvecs[i].inode = BPF_CORE_READ(p, mapping, host, i_ino);
-    bvecs.bvecs[i].bv_len = BPF_CORE_READ(v, bv_len);
-    bvecs.bvecs[i].bv_offset =
-        BPF_CORE_READ(v, bv_offset) + (BPF_CORE_READ(p, index) << 12);
-  }
-  bpf_map_update_elem(&bvecArrayMap, &task_info->bio_info.bio, &bvecs, BPF_ANY);
-}
 
 // TP_PROTO(struct request *rq),
 // TP_fast_assign(
@@ -424,7 +396,7 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
   }
   int bio_cnt = 0;
   struct bio *bio = BPF_CORE_READ(rq, bio);
-  struct bvec_iter bi_iter = {};
+  struct bvec_iter bi_iter;
   bi_iter = BPF_CORE_READ(bio, bi_iter);
   nr_bytes += bi_iter.bi_bvec_done;
   for (int i = 0; i < MAX_BIO_PER_RQ; i++) {
@@ -485,8 +457,7 @@ int raw_tracepoint__block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
   }
   bpf_get_current_comm(&task_info->comm, 80);
   set_common_info(task_info, tid, tgid, block_rq_insert, rq_info);
-  task_info->rq_info.dev = dev;
-  task_info->rq_info.rq = (unsigned long long)rq;
+  set_rq_comm_info(task_info, rq, dev);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -509,8 +480,7 @@ int raw_tracepoint__block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
   }
   bpf_get_current_comm(&task_info->comm, 80);
   set_common_info(task_info, tid, tgid, block_rq_issue, rq_info);
-  task_info->rq_info.dev = dev;
-  task_info->rq_info.rq = (unsigned long long)rq;
+  set_rq_comm_info(task_info, rq, dev);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -596,12 +566,51 @@ int raw_tracepoint__block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
 //   bpf_ringbuf_submit(task_info, 0);
 //   return 0;
 // }
+static inline void set_bio_rq_association_info(struct event* task_info, struct request* rq,struct bio* bio,dev_t dev){
+  task_info->bio_rq_association_info.dev = dev;
+  task_info->bio_rq_association_info.rq = (unsigned long long)rq;
+  task_info->bio_rq_association_info.bio = (unsigned long long)bio;
+}
+
 SEC("kprobe/__rq_qos_track")
 int BPF_KPROBE(trace_rq_qos_track,struct request_queue*q,struct request*rq,struct bio* bio){
-
+  u64 id = bpf_get_current_pid_tgid();
+  pid_t tgid = id >> 32;
+  pid_t tid = id & 0xffffffff;
+  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+  if (common_filter(tid, tgid, dev, 0, 0)) {
+    return 1;
+  }
+  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  if (!task_info) {
+    return 0;
+  }
+  bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, tid, tgid, rq_qos_track, bio_rq_association_info);
+  set_bio_rq_association_info(task_info, rq, bio, dev);
+  bpf_ringbuf_submit(task_info, 0);
+  return 0;
 }
+
+
 SEC("kprobe/__rq_qos_merge")
 int BPF_KPROBE(trace_rq_qos_merge,struct request_queue*q,struct request*rq,struct bio* bio){
+  u64 id = bpf_get_current_pid_tgid();
+  pid_t tgid = id >> 32;
+  pid_t tid = id & 0xffffffff;
+  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+  if (common_filter(tid, tgid, dev, 0, 0)) {
+    return 1;
+  }
+  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  if (!task_info) {
+    return 0;
+  }
+  bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, tid, tgid, rq_qos_track, bio_rq_association_info);
+  set_bio_rq_association_info(task_info, rq, bio, dev);
+  bpf_ringbuf_submit(task_info, 0);
+  return 0;
 
 }
 
@@ -664,8 +673,29 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
   }
   bpf_get_current_comm(&task_info->comm, 80);
   set_common_info(task_info, tid, tgid, block_bio_queue,bio_info);
-  set_queue_bio_info(task_info, bio, dev);
+  task_info->bio_info.bio = (unsigned long long)bio;
+  task_info->bio_info.dev = dev;
+  task_info->bio_info.bio_info_type = queue_first_bio;
+  unsigned int bvec_cnt = BPF_CORE_READ(bio, bi_vcnt);
+  struct bvec_array_info* bvecs = bpf_ringbuf_reserve(&rb, sizeof(struct bvec_array_info), 0);
+  if(bvecs == NULL){
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
+  bvecs->info_type = bio_bvec_info;
+  bvecs->bvec_cnt = bvec_cnt;
+  bvecs->bio = (unsigned long long)bio;
+  struct bio_vec *bv = BPF_CORE_READ(bio, bi_io_vec);
+  for (int i = 0; i < (bvec_cnt & MAX_BVEC_PER_BIO); i++) {
+    struct bio_vec *v = bv + i;
+    struct page *p = BPF_CORE_READ(v, bv_page);
+    bvecs->bvecs[i].inode = BPF_CORE_READ(p, mapping, host, i_ino);
+    bvecs->bvecs[i].index = BPF_CORE_READ(p,index);
+    bvecs->bvecs[i].bv_len = BPF_CORE_READ(v, bv_len);
+    bvecs->bvecs[i].bv_offset = BPF_CORE_READ(v, bv_offset) ;
+  }
   bpf_ringbuf_submit(task_info, 0);
+  bpf_ringbuf_submit(bvecs, 0);
   return 0;
 }
 
@@ -689,10 +719,6 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
 //   bpf_ringbuf_submit(task_info, 0);
 //   return 0;
 // }
-SEC("kprobe/blk_add_rq_to_plug")
-int BPF_KPROBE(trace_blk_add_rq_to_plug,struct blk_plug*q,struct request*rq){
-
-}
 // TP_PROTO(struct request_queue *q)
 // TP_fast_assign(
 // 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
@@ -715,8 +741,10 @@ int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_bio_complete, block_layer);
-  // no other info
+  set_common_info(task_info, tid, tgid, block_plug, rq_plug_info);
+  task_info->rq_plug_info.dev = dev;
+  task_info->rq_plug_info.plug_or_unplug = 1;
+  task_info->rq_plug_info.request_queue = (unsigned long long)q;
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -726,7 +754,7 @@ int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
 // // 		__entry->nr_rq = depth;
 // // 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
 // // 	),
-SEC("raw_tp/block_unplug") TODO:
+SEC("raw_tp/block_unplug") 
 int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
   unsigned int depth = (unsigned int)(ctx->args[1]);
@@ -745,9 +773,10 @@ int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_comm_info(task_info, tid, tgid, block_bio_complete, block_layer);
-  // no other info FIXME: convay depth
-  task_info->bio_layer_info.nr_rq = depth;
+  set_common_info(task_info, tid, tgid, block_unplug, rq_plug_info);
+  task_info->rq_plug_info.dev = dev;
+  task_info->rq_plug_info.plug_or_unplug = 0;
+  task_info->rq_plug_info.request_queue = (unsigned long long)q;
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -833,7 +862,7 @@ int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
 //   sector_t from = (sector_t)(ctx->args[2]);
 //   return 0;
 // }
-// SEC("tp/block/block_rq_remap")
+// SEC("tp/block/block_rq_remap") //TODO:
 // int tracepoint__block_rq_remap(struct trace_event_raw_block_rq_remap *ctx) {
 //   dev_t dev = (dev_t)(ctx->dev);
 //   u64 id = bpf_get_current_pid_tgid();
@@ -856,72 +885,6 @@ int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
 //   task_info->bio_layer_info.nr_bios = ctx->nr_bios;
 //   bpf_probe_read_str(&task_info->bio_layer_info.rwbs,
 //                      sizeof(task_info->bio_layer_info.rwbs), ctx->rwbs);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// SEC("fentry/submit_bio")
-// int BPF_PROG(trace__submit_bio,
-//              struct bio *bio) { // ctx->args[0] 是 ptgreg 的指向原触发
-//                                 // tracepoint 的函数的参数， ctx->args[1] 是
-//                                 // tracepoint 定义 trace 函数的第一个参数
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 0;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tid, tgid, submit_bio, bio_info);
-//   set_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// SEC("fentry/bio_endio")
-// int BPF_PROG(trace__bio_endio, struct bio *bio) {
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 0;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tid, tgid, bio_endio, bio_info);
-//   set_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// SEC("fentry/submit_bio_noacct")
-// int BPF_PROG(trace__submit_bio_1,
-//              struct bio *bio) { // ctx->args[0] 是 ptgreg 的指向原触发
-//                                 // tracepoint 的函数的参数， ctx->args[1] 是
-//                                 // tracepoint 定义 trace 函数的第一个参数
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 0;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tid, tgid, submit_bio, bio_info);
-//   set_bio_info(task_info, bio, dev);
 //   bpf_ringbuf_submit(task_info, 0);
 //   return 0;
 // }

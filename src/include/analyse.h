@@ -42,7 +42,7 @@ struct TraceConfig {
 class DoneRequestHandler {
 public:
   explicit DoneRequestHandler(TraceConfig config) : config(std::move(config)) {}
-  virtual void HandleDoneRequest(std::unique_ptr<Request>) = 0;
+  virtual void HandleDoneRequest(std::shared_ptr<Request>) = 0;
   //
   TraceConfig config;
 };
@@ -53,9 +53,9 @@ public:
     this->SetDoneRequestHandler(std::move(handler));
   }
   ~Analyser() {}
-  virtual void AddTrace(struct event *e) = 0;
-  void DoneRequest(std::unique_ptr<Request> req) {
-    done_request_handler->HandleDoneRequest(std::move(req));
+  virtual void AddTrace(void *data,size_t data_size) = 0;
+  void DoneRequest(std::shared_ptr<Request> req) {
+    done_request_handler->HandleDoneRequest(req);
   }
 
 private:

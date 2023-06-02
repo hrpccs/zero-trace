@@ -28,7 +28,9 @@ add_dependencies(iotracer iotrace_skel)
 add_library(iotrace_bpf OBJECT ${CMAKE_SOURCE_DIR}/iotrace.bpf.c)
 target_compile_options(iotrace_bpf PRIVATE  -target bpf -D__TARGET_ARCH_x86)
 set_target_properties(iotrace_bpf PROPERTIES COMPILE_FLAGS "-xc")
-add_dependencies(iotrace_bpf libbpf vmlinux.h)
+add_dependencies(iotrace_bpf libbpf vmlinux.h iotrace_bpf_program)
+
+add_custom_target(iotrace_bpf_program DEPENDS ${CMAKE_SOURCE_DIR}/iotrace.bpf.c)
 
 # Generate iotrace.skel.h from iotrace.bpf.o
 add_custom_command(
@@ -36,7 +38,7 @@ add_custom_command(
     COMMAND cp $<TARGET_OBJECTS:iotrace_bpf> /tmp/iotrace.bpf.o
     COMMAND bpftool gen skeleton  /tmp/iotrace.bpf.o  > ${CMAKE_SOURCE_DIR}/include/iotrace.skel.h 
     COMMAND rm /tmp/iotrace.bpf.o
-    DEPENDS iotrace_bpf 
+    DEPENDS iotrace_bpf    iotrace_bpf_program 
 )
 # Add iotrace_bpf to the iotracer executable
 target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z)

@@ -4,9 +4,11 @@
 // block
 
 #include "io_analyse.h"
+#include "event_defs.h"
 #include "hook_point.h"
 #include "io_event.h"
 #include <bits/types/FILE.h>
+#include <cstddef>
 #include <memory>
 
 // class IOEventBuilder : public EventBuilder {
@@ -32,7 +34,7 @@ double timestamp2ms(unsigned long long timestamp) {
   return timestamp / 1000000.0;
 }
 
-void IOEndHandler::HandleDoneRequest(std::unique_ptr<Request> request) {
+void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   assert(outputFile != nullptr);
   IORequest *iorequest = dynamic_cast<IORequest *>(request.get());
   assert(iorequest != nullptr);
@@ -86,7 +88,7 @@ void IOEndHandler::HandleDoneRequest(std::unique_ptr<Request> request) {
         tapnum--;
       }
     } else if (auto asyncevent = dynamic_cast<BlockPendingDuration *>(e)) {
-      printf("bio count %d\n", asyncevent->relative_bio.size());
+      printf("bio count %ld\n", asyncevent->relative_bio.size());
       asyncevent->printfmtNtap(outputFile, tapnum);
     }
   }
@@ -94,117 +96,97 @@ void IOEndHandler::HandleDoneRequest(std::unique_ptr<Request> request) {
   request.reset();
 }
 
-void IOAnalyser::AddTrace(struct event *e) {
-  trace_count++;
-  printf("%s\n",kernel_hook_type_str[e->event_type]);
-  if (e->info_type == bio_info) {
-    if (e->event_type == submit_bio) {
-      if (bio_map.find(e->bio_info.bio) != bio_map.end()) {
-        printf("bio already exist pid %d, tid %d, comm %s\n", e->pid, e->tid,
-               e->comm);
-        return;
+void IOAnalyser::AddTrace(void *data, size_t data_size) {
+  if (data_size == sizeof(struct bvec_array_info)) {
+    printf("IOAnalyser::AddTrace: bvec_array_info, bvec cnt %u\n",
+           ((struct bvec_array_info *)data)->bvec_cnt);
+    struct bvec_array_info *bvec_info = (struct bvec_array_info *)data;
+    processBioQueue2(bvec_info->bio, bvec_info);
+  } else if (data_size == sizeof(struct event)) {
+    struct event *e = (struct event *)data;
+    printf("IOAnalyser::AddTrace: event type %s\n",
+           kernel_hook_type_str[e->event_type]);
+    auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
+                                             std::string(e->comm));
+    if (e->info_type == bio_rq_association_info) {
+      if (e->event_type == rq_qos_track || e->event_type == rq_qos_merge) {
+        addBioRqAssociation(e->bio_rq_association_info.bio,
+                            e->bio_rq_association_info.rq,
+                            e->bio_rq_association_info.request_queue);
+        addEventToBio(e->bio_rq_association_info.bio, event);
+      } else if (e->event_type == block_rq_complete) {
+        deleteBioRqAssociation(e->bio_rq_association_info.bio,
+                               e->bio_rq_association_info.rq,
+                               e->bio_rq_association_info.request_queue);
+        addEventToBio(e->bio_rq_association_info.bio, event);
+      } else {
+        printf("IOAnalyser::AddTrace: unknown event type %s\n",
+               kernel_hook_type_str[e->event_type]);
+        assert(false);
       }
-      auto bio = std::make_shared<BioObject>();
+    } else if (e->info_type == rq_info) {
       auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
                                                std::string(e->comm));
-      bio_map[e->bio_info.bio] = bio;
-      bio->addRelativeEvent(event);
-      // find the request
-      for (auto &request :
-           pending_requests) { // NOTE: make sure pending_requests
-                               // will not change during this time
-        for (int i = 0; i < e->bio_info.bvec_cnt; i++) {
-          if (request->isRelative(e->bio_info.bvecs[i].inode,
-                                  e->bio_info.bvecs[i].bv_offset,
-                                  e->bio_info.bvecs[i].bv_len)) {
-            request->addBioObject(bio);
+      if (e->event_type == block_rq_insert || e->event_type == block_rq_issue) {
+        addEventToRequest(e->rq_info.rq, event);
+      } else {
+        printf("IOAnalyser::AddTrace: unknown event type %s\n",
+               kernel_hook_type_str[e->event_type]);
+        assert(false);
+      }
+    } else if (e->info_type == bio_info) {
+      auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
+                                               std::string(e->comm));
+      if (e->event_type == block_bio_queue) {
+        processBioQueue1(e->bio_info.bio);
+        addEventToBio(e->bio_info.bio, event);
+      } else if (e->event_type == block_split) {
+        processBioSplit(e->bio_info.bio, e->bio_info.parent_bio,
+                        e->bio_info.bvec_idx_start, e->bio_info.bvec_idx_end);
+        addEventToBio(e->bio_info.bio, event);
+      } else {
+        printf("IOAnalyser::AddTrace: unknown event type %s\n",
+               kernel_hook_type_str[e->event_type]);
+        assert(false);
+      }
+    } else if (e->info_type == rq_plug_info) {
+      auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
+                                               std::string(e->comm));
+      if (e->event_type == block_plug || e->event_type == block_unplug) {
+        addEventToRequestQueue(e->rq_plug_info.request_queue, event);
+      }
+    } else if (e->info_type == vfs_layer) {
+      std::unique_ptr<SyncEvent> event = std::make_unique<SyncEvent>(
+          e->event_type, e->timestamp, std::string(e->comm));
+      if (e->event_type == vfs_read_enter || e->event_type == vfs_write_enter) {
+        event->type = SyncEvent::ENTER;
+        IORequest *io_request = nullptr;
+        std::unique_ptr<IORequest> request = std::make_unique<IORequest>(
+            e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
+            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes);
+        io_request = request.get();
+        AddRequest(std::move(request));
+        if (io_request != nullptr) {
+          io_request->AddEvent(std::move(event));
+        }
+      } else if (e->event_type == vfs_read_exit ||
+                 e->event_type == vfs_write_exit) {
+        event->type = SyncEvent::EXIT;
+        int indexDone = -1;
+        for (int i = 0; i < pending_requests.size(); i++) {
+          auto io_request = pending_requests[i];
+          if (io_request->isEqual(e->vfs_layer_info.inode,
+                                  e->vfs_layer_info.file_offset,
+                                  e->vfs_layer_info.file_bytes)) {
+            io_request->AddEvent(std::move(event));
+            EndRequest(i);
             break;
           }
         }
       }
-    } else {
-      if (bio_map.find(e->bio_info.bio) == bio_map.end()) {
-        printf("one bio not found pid %d, tid %d, comm %s\n", e->pid, e->tid,
-               e->comm);
-        return;
-      }
-      auto bio = bio_map[e->bio_info.bio];
-      std::unique_ptr<SyncEvent> event = std::make_unique<SyncEvent>(
-          e->event_type, e->timestamp, std::string(e->comm));
-      event->type = SyncEvent::EXIT;
-      bio->addRelativeEvent(std::move(event));
-
-      if (e->event_type == bio_endio) {
-        bio_map.erase(e->bio_info.bio);
-      }
     }
-  } else if (e->info_type == rq_info) {
-    auto event = std::make_shared<SyncEvent>(
-        e->event_type, e->timestamp, std::string(e->comm));
-    event->type = SyncEvent::EXIT;
-
-    for (int i = 0; i < e->rq_info.relative_bio_cnt; i++) {
-      if (bio_map.find(e->rq_info.relative_bios[i]) == bio_map.end()) {
-        printf("rq's bio not found pid %d, tid %d, comm %s\n", e->pid, e->tid,
-               e->comm);
-        continue;
-      }
-      auto bio = bio_map[e->rq_info.relative_bios[i]];
-      bio->addRelativeEvent(event);
-    }
-
   } else {
-    if(e->info_type != vfs_layer){
-      printf("IOAnalyser::AddTrace: unknown info type %s\n", info_type_str[e->info_type]);
-      assert(false);
-    }
-    std::unique_ptr<SyncEvent> event = std::make_unique<SyncEvent>(
-        e->event_type, e->timestamp, std::string(e->comm));
-
-    bool createNewRequest = false;
-    bool endRequest = false;
-    int indexDone = -1;
-    if (e->event_type == vfs_read_enter || e->event_type == vfs_write_enter) {
-      event->type = SyncEvent::ENTER;
-      createNewRequest = true;
-    } else if (e->event_type == vfs_read_exit ||
-               e->event_type == vfs_write_exit) {
-      event->type = SyncEvent::EXIT;
-      endRequest = true;
-    }
-
-    IORequest *io_request = nullptr;
-    if (createNewRequest) {
-      std::unique_ptr<IORequest> request = std::make_unique<IORequest>(
-          e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
-          e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes);
-      io_request = request.get();
-      AddRequest(std::move(request));
-    } else {
-      for (int i = 0; i < pending_requests.size(); i++) {
-        IORequest *request =
-            dynamic_cast<IORequest *>(pending_requests[i].get());
-        assert(request != nullptr);
-        bool relative = true;
-        relative = request->isRelative(e->vfs_layer_info.inode,
-                                          e->vfs_layer_info.file_offset,
-                                          e->vfs_layer_info.file_bytes);
-        if (relative) {
-          if (endRequest) {
-            indexDone = i;
-          }
-          io_request = request;
-          break;
-        }
-      }
-    }
-
-    if(io_request != nullptr) {
-      io_request->AddEvent(std::move(event));
-    }
-
-    if (indexDone != -1) {
-      EndRequest(indexDone);
-    }
+    printf("unknown data struct\n");
+    assert(false);
   }
 }
