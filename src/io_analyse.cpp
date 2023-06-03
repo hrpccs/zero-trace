@@ -64,7 +64,7 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
         tapnum--;
       }
     } else if (auto asyncevent = dynamic_cast<BlockPendingDuration *>(e)) {
-      fprintf(outputFile,"bio count %ld\n", asyncevent->relative_bio.size());
+      fprintf(outputFile, "bio count %ld\n", asyncevent->relative_bio.size());
       asyncevent->printfmtNtap(outputFile, tapnum);
     }
   }
@@ -72,6 +72,20 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   request.reset();
 }
 
+void IOAnalyser::processVfsEntry(struct event *&e,
+                           std::unique_ptr<SyncEvent> &event) {
+  event->type = SyncEvent::EXIT;
+  for (int i = pending_requests.size() - 1; i >= 0; i--) {
+    auto io_request = pending_requests[i];
+    if (io_request->isEqual(e->vfs_layer_info.inode,
+                            e->vfs_layer_info.file_offset,
+                            e->vfs_layer_info.file_bytes)) {
+      io_request->AddEvent(std::move(event));
+      EndRequest(i);
+      break;
+    }
+  }
+}
 void IOAnalyser::AddTrace(void *data, size_t data_size) {
   if (data_size == sizeof(struct bvec_array_info)) {
     // printf("IOAnalyser::AddTrace: bvec_array_info, bvec cnt %u\n",
@@ -103,11 +117,12 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
     } else if (e->info_type == rq_info) {
       auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
                                                std::string(e->comm));
-      if (e->event_type == block_rq_insert || e->event_type == block_rq_issue || e->event_type == rq_qos_requeue) {
+      if (e->event_type == block_rq_insert || e->event_type == block_rq_issue ||
+          e->event_type == rq_qos_requeue) {
         addEventToRequest(e->rq_info.rq, event);
       } else if (e->event_type == rq_qos_done) {
         addEventToRequest(e->rq_info.rq, event);
-        deleteRequestObject(e->rq_info.rq,e->rq_info.request_queue);
+        deleteRequestObject(e->rq_info.rq, e->rq_info.request_queue);
       } else {
         printf("IOAnalyser::AddTrace: unknown event type %s\n",
                kernel_hook_type_str[e->event_type]);
@@ -117,7 +132,7 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
       auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
                                                std::string(e->comm));
       if (e->event_type == block_bio_queue) {
-        processBioQueue1(e->bio_info.bio,e->bio_info.bio_op);
+        processBioQueue1(e->bio_info.bio, e->bio_info.bio_op);
         addEventToBio(e->bio_info.bio, event);
       } else if (e->event_type == block_split) {
         processBioSplit(e->bio_info.bio, e->bio_info.parent_bio,
@@ -143,22 +158,10 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
             e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
             e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes);
         AddRequest(io_request);
-        if (io_request != nullptr) {
-          io_request->AddEvent(std::move(event));
-        }
+        io_request->AddEvent(std::move(event));
       } else if (e->event_type == vfs_read_exit ||
                  e->event_type == vfs_write_exit) {
-        event->type = SyncEvent::EXIT;
-        for (int i = pending_requests.size()-1; i >= 0; i--) {
-          auto io_request = pending_requests[i];
-          if (io_request->isEqual(e->vfs_layer_info.inode,
-                                  e->vfs_layer_info.file_offset,
-                                  e->vfs_layer_info.file_bytes)) {
-            io_request->AddEvent(std::move(event));
-            EndRequest(i);
-            break;
-          }
-        }
+        processVfsEntry(e, event);
       }
     }
   } else {

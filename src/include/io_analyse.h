@@ -44,6 +44,7 @@ public:
   IOAnalyser(std::unique_ptr<DoneRequestHandler> handler)
       : Analyser(std::move(handler)) {}
   ~IOAnalyser() {}
+  void processVfsEntry(struct event *&e, std::unique_ptr<SyncEvent> &event);
   void AddTrace(void *data, size_t data_size) override;
   void AddRequest(std::shared_ptr<IORequest> request) {
     pending_requests.push_back(std::move(request));
