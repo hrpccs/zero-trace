@@ -88,7 +88,7 @@ void parse_args(int argc, char **argv) {
   unsigned long long directory = 0;
   char *output = NULL;
 
-  double time_threshold = 0.0;
+  double time_threshold = 1.0;
 
   printf("Parsing arguments\n");
   output_file = stdout;
@@ -149,7 +149,7 @@ void parse_args(int argc, char **argv) {
   // Do something with the parsed arguments
   // #ifdef CONFIG_BLK_CGROUP
   // #endif
-  auto handler = std::make_unique<IOEndHandler>(config);
+  auto handler = std::make_unique<IOEndHandler>(std::move(config));
   analyser = new IOAnalyser(std::move(handler));
 
   if (dev != NULL) {

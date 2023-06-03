@@ -1,8 +1,3 @@
-
-// a worklist store pending requests
-// vfs
-// block
-
 #include "io_analyse.h"
 #include "event_defs.h"
 #include "hook_point.h"
@@ -11,25 +6,6 @@
 #include <cstddef>
 #include <memory>
 
-// class IOEventBuilder : public EventBuilder {
-// public:
-//   IOEventBuilder() {}
-//   ~IOEventBuilder() {}
-//   std::shared_ptr<Event> BuildEvent(struct event *e) override;
-// };
-
-// std::shared_ptr<Event> IOEventBuilder::BuildEvent(struct event *e) {
-//   std::shared_ptr<SyncEvent> event;
-//   event = std::make_shared<SyncEvent>();
-//   event->event_type = e->event_type;
-//   event->timestamp = e->timestamp;
-
-//   if (event->event_type == vfs_read_enter ||
-//       event->event_type == vfs_write_enter) {
-//   }
-
-//   return event;
-// }
 double timestamp2ms(unsigned long long timestamp) {
   return timestamp / 1000000.0;
 }
@@ -104,8 +80,8 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
     processBioQueue2(bvec_info->bio, bvec_info);
   } else if (data_size == sizeof(struct event)) {
     struct event *e = (struct event *)data;
-    printf("IOAnalyser::AddTrace: event type %s\n",
-           kernel_hook_type_str[e->event_type]);
+    printf("IOAnalyser::AddTrace: event type %s comm %s\n",
+           kernel_hook_type_str[e->event_type],e->comm);
     auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
                                              std::string(e->comm));
     if (e->info_type == bio_rq_association_info) {
@@ -115,10 +91,10 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
                             e->bio_rq_association_info.request_queue);
         addEventToBio(e->bio_rq_association_info.bio, event);
       } else if (e->event_type == block_rq_complete) {
+        addEventToBio(e->bio_rq_association_info.bio, event);
         deleteBioRqAssociation(e->bio_rq_association_info.bio,
                                e->bio_rq_association_info.rq,
                                e->bio_rq_association_info.request_queue);
-        addEventToBio(e->bio_rq_association_info.bio, event);
       } else {
         printf("IOAnalyser::AddTrace: unknown event type %s\n",
                kernel_hook_type_str[e->event_type]);
@@ -150,6 +126,7 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
         assert(false);
       }
     } else if (e->info_type == rq_plug_info) {
+        return;
       auto event = std::make_shared<SyncEvent>(e->event_type, e->timestamp,
                                                std::string(e->comm));
       if (e->event_type == block_plug || e->event_type == block_unplug) {

@@ -10,6 +10,10 @@
 
 struct TraceConfig {
 
+  TraceConfig(const TraceConfig &) = default;
+  TraceConfig(TraceConfig &&) = default;
+  TraceConfig &operator=(const TraceConfig &) = default;
+  TraceConfig &operator=(TraceConfig &&) = default;
   TraceConfig(unsigned long pid, unsigned long tid, std::filesystem::path dev,
               unsigned long ino, unsigned long long dir_ino,
               double time_threshold, std::filesystem::path output_path)
@@ -41,7 +45,7 @@ struct TraceConfig {
 
 class DoneRequestHandler {
 public:
-  explicit DoneRequestHandler(TraceConfig config) : config(std::move(config)) {}
+  explicit DoneRequestHandler(TraceConfig&& config) : config(std::move(config)) {}
   virtual void HandleDoneRequest(std::shared_ptr<Request>) = 0;
   //
   TraceConfig config;

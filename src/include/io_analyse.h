@@ -16,8 +16,9 @@
 
 class IOEndHandler : public DoneRequestHandler {
 public:
-  IOEndHandler(TraceConfig config) : DoneRequestHandler(std::move(config)) {
-    std::filesystem::path &output_path = config.output_path;
+  IOEndHandler(TraceConfig&& config) : DoneRequestHandler(std::move(config)) {
+    std::filesystem::path &output_path = this->config.output_path;
+    printf("IOEndHandler: open output file %s\n", output_path.c_str());
     if (!output_path.empty()) {
       outputFile = fopen(output_path.c_str(), "w");
       if (outputFile == nullptr) {
@@ -50,79 +51,78 @@ public:
   void EndRequest(int idx) {
     std::shared_ptr<IORequest> request = std::move(pending_requests[idx]);
     pending_requests.erase(pending_requests.begin() + idx);
-    printf("IOAnalyser: request %lld end\n", request->id);
+    // printf("IOAnalyser: request %lld end\n", request->id);
     Analyser::DoneRequest(std::move(request));
   }
 
   void AddRequestObject(unsigned long long rq,
                         unsigned long long request_queue) {
-    auto &request_queue_object = request_queue_map[request_queue];
-    if (request_queue_object == nullptr) {
-      request_queue_object = std::make_shared<RequestQueueObject>();
+    if (request_queue_map.find(request_queue) == request_queue_map.end()) {
+      request_queue_map[request_queue] = std::make_shared<RequestQueueObject>();
     }
-    auto &request_object = request_map[rq];
-    if (request_object == nullptr) {
-      request_object = std::make_shared<RequestObject>();
+
+    if (request_map.find(rq) == request_map.end()) {
+      request_map[rq] = std::make_shared<RequestObject>();
     }
+
+    auto request_queue_object = request_queue_map[request_queue];
+    auto request_object = request_map[rq];
     request_queue_object->request_objects.push_back(std::move(request_object));
   }
 
-  void addBioRqAssociation(
+  // must have bio queue or split first
+  bool addBioRqAssociation(
       unsigned long long bio,
       unsigned long long rq, // for add bio to request, merge bio with request
       unsigned long long request_queue) {
-    auto &bio_object = bio_map[bio];
-    if (bio_object == nullptr) {
-      bio_object = std::make_shared<BioObject>();
-      assert(false && "can not find bio object");
+    if (bio_map.find(bio) == bio_map.end()) {
+      return false;
     }
+
     if (request_map.find(rq) == request_map.end()) {
       AddRequestObject(rq, request_queue);
     }
     auto request_object = request_map[rq];
+    auto bio_object = bio_map[bio];
     request_object->bio_objects.push_back(std::move(bio_object));
+    return true;
   }
 
-  void deleteBioRqAssociation(unsigned long long bio,
+  bool deleteBioRqAssociation(unsigned long long bio,
                               unsigned long long rq, // block_rq_complete
                               unsigned long long request_queue) {
-    auto &bio_object = bio_map[bio];
-    if (bio_object == nullptr) {
-      assert(false && "can not find bio object");
-    }
-    auto &request_object =
-        request_map[rq]; // TODO: will not change request when it enters one
-    if (request_object == nullptr) {
-      assert(false && "can not find request object");
+    if (bio_map.find(bio) == bio_map.end()) {
+      return false;
     }
     bio_map.erase(bio);
+    return true;
     // leave bio_object weak ptr in request_object
   }
 
-  void deleteRequestObject(unsigned long long rq,
+  bool deleteRequestObject(unsigned long long rq,
                            unsigned long long request_queue) {
-    auto &request_object = request_map[rq];
-    if (request_object == nullptr) {
-      assert(false && "can not find request object");
+    if (request_map.find(rq) == request_map.end()) {
+      return false;
     }
     request_map.erase(rq);
+    return true;
     // leave request_object weak ptr in request_queue_object
   }
 
   void processBioQueue1(unsigned long long bio) {
-    auto &bio_object = bio_map[bio];
-    if (bio_object == nullptr) {
-      bio_object = std::make_shared<BioObject>();
-    } else {
-      assert(false && "find bio before queue");
-    }
+    // 覆盖
+    auto bio_object = std::make_shared<BioObject>();
+    bio_map[bio] = bio_object;
     // add bio but not with bvec
   }
 
-  void processBioQueue2(unsigned long long bio,
+  bool processBioQueue2(unsigned long long bio,
                         struct bvec_array_info *bvec_info) {
-    auto &bio_object = bio_map[bio];
-    assert(bio_object != nullptr && "can not find bio object");
+    if (bio_map.find(bio) == bio_map.end()) {
+      return false;
+    }
+    auto bio_object = bio_map[bio];
+    assert(bio_object->parent.get() == 0);
     for (int i = 0; i < bvec_info->bvec_cnt; i++) {
       auto inode = bvec_info->bvecs[i].inode;
       auto offset =
@@ -134,20 +134,22 @@ public:
     for (auto &io_request : pending_requests) {
       io_request->AddBioObjectAndBuildMapping(bio_object, io_request);
     }
+    return true;
   }
 
-  void processBioSplit(unsigned long long bio, unsigned long long parent_bio,
+  bool processBioSplit(unsigned long long bio, unsigned long long parent_bio,
                        unsigned short bvec_idx_start,
                        unsigned short bvec_idx_end) {
-    auto &parent_bio_object = bio_map[parent_bio];
-    assert(parent_bio_object != nullptr && "can not find parent bio object");
-    auto &child_bio_object = bio_map[bio];
-    if (child_bio_object == nullptr) {
-      child_bio_object = std::make_shared<BioObject>(); // update bio_map
-    } else {
-      assert(false && "find bio before split");
+    if (bio_map.find(parent_bio) == bio_map.end()) {
+      return false;
     }
-
+    auto parent_bio_object = bio_map[parent_bio];
+    if (bio_map.find(bio) != bio_map.end()) {
+      return false;
+    }
+    auto child_bio_object = std::make_shared<BioObject>(); // update bio_map
+    child_bio_object->parent = parent_bio_object;
+    bio_map[bio] = child_bio_object;
     // add bio to relative request base on bvec_idx
     bvec_idx_end = bvec_idx_end >= parent_bio_object->associations.size()
                        ? parent_bio_object->associations.size() - 1
@@ -161,30 +163,40 @@ public:
         io_request->addBioObject(child_bio_object);
       }
     }
+    return true;
   }
 
-  void addEventToBio(unsigned long long bio, std::shared_ptr<SyncEvent> event) {
-    auto &bio_object = bio_map[bio];
-    assert(bio_object != nullptr && "can not find bio object");
+  bool addEventToBio(unsigned long long bio, std::shared_ptr<SyncEvent> event) {
+    if (bio_map.find(bio) == bio_map.end()) {
+      return false;
+    }
+    auto bio_object = bio_map[bio];
     bio_object->addRelativeEvent(event);
+    return true;
   }
 
-  void addEventToRequest(unsigned long long rq,
+  bool addEventToRequest(unsigned long long rq,
                          std::shared_ptr<SyncEvent> event) {
-    auto &request_object = request_map[rq];
-    assert(request_object != nullptr && "can not find request object");
+    if (request_map.find(rq) == request_map.end()) {
+      return false;
+    }
+    auto request_object = request_map[rq];
     request_object->addEvent(event);
+    return true;
   }
 
-  void addEventToRequestQueue(unsigned long long request_queue,
+  bool addEventToRequestQueue(unsigned long long request_queue,
                               std::shared_ptr<SyncEvent> event) {
-    auto &request_queue_object = request_queue_map[request_queue];
-    assert(request_queue_object != nullptr &&
-           "can not find request queue object");
-    request_queue_object->addEvent(event);
-  }
+    if (request_queue_map.find(request_queue) == request_queue_map.end()) {
+      return false;
+    }
 
-  void addUniqueEventToIORequest() {}
+    auto &request_queue_object = request_queue_map[request_queue];
+    // assert(request_queue_object != nullptr && "can not find request queue
+    // object");
+    request_queue_object->addEvent(event);
+    return true;
+  }
 
   struct RequestObject {
     std::vector<std::weak_ptr<BioObject>> bio_objects;

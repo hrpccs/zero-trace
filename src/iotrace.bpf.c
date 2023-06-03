@@ -171,7 +171,6 @@ int BPF_PROG(exit_vfs_read) {
       offset -= ret;
     }
   }
-  bpf_probe_read(&offset, sizeof(loff_t), pos);
   set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
@@ -247,39 +246,11 @@ int BPF_PROG(exit_vfs_write) {
       offset -= ret;
     }
   }
-  bpf_probe_read(&offset, sizeof(loff_t), pos);
   set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
 
-// block layer raw tracepoints
-// /sys/kernel/debug/tracing/events/block/*
-// ctx->args 是 trace_proto 中的参数
-// TP_PROTO 从 linux kernel 代码中 include/trace/events/block.h 中找到
-
-// TP_PROTO(struct buffer_head *bh),
-// TP_fast_assign(
-// 		__entry->dev		= bh->b_bdev->bd_dev;
-// 		__entry->sector		= bh->b_blocknr;
-// 		__entry->size		= bh->b_size;
-// 	),
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tgid, tid, block_touch_buffer, block_layer);
-//   task_info->bio_layer_info.dev = dev;
-//   task_info->bio_layer_info.bio_sector = BPF_CORE_READ(bh, b_blocknr);
-//   task_info->bio_layer_info.bio_size = BPF_CORE_READ(bh, b_size);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tgid, tid, block_dirty_buffer, block_layer);
-//   task_info->bio_layer_info.dev = dev;
-//   task_info->bio_layer_info.bio_sector = BPF_CORE_READ(bh, b_blocknr);
-//   task_info->bio_layer_info.bio_size = BPF_CORE_READ(bh, b_size);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
 static inline bool rq_is_passthrough(unsigned int rq_cmd_flags) {
   if (rq_cmd_flags & REQ_OP_MASK) {
     unsigned int op = rq_cmd_flags & REQ_OP_MASK;
@@ -295,20 +266,7 @@ static inline void set_rq_comm_info(struct event *task_info, struct request *rq,
   task_info->rq_info.dev = dev;
   task_info->rq_info.rq = (unsigned long long)rq;
   task_info->rq_info.request_queue = (unsigned long long)BPF_CORE_READ(rq,q);
-  // int bio_cnt = 0;
-  // struct bio *bio = BPF_CORE_READ(rq, bio);
-  // for (int i = 0; i < MAX_BIO_PER_RQ; i++) {
-  //   if (bio == NULL) {
-  //     break;
-  //   }
-  //   int bio_flag = BPF_CORE_READ(bio, bi_flags);
-  //   if (bio_flag & BIO_TRACE_MASK) {
-  //     bio_cnt++;
-  //     task_info->rq_info.relative_bios[i] = (unsigned long long)bio;
-  //   }
-  //   bio = BPF_CORE_READ(bio, bi_next);
-  // }
-  // task_info->rq_info.relative_bio_cnt = bio_cnt;
+
 }
 
 
@@ -337,49 +295,6 @@ static inline void set_split_bio_info(struct event *task_info, struct bio *bio,
   task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
 }
 
-
-// TP_PROTO(struct request *rq),
-// TP_fast_assign(
-// 	__entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
-// 	__entry->sector    = blk_rq_trace_sector(rq);
-// 	__entry->nr_sector = blk_rq_trace_nr_sectors(rq);
-// 	blk_fill_rwbs(__entry->rwbs, rq->cmd_flags);
-// 	__get_str(cmd)[0] = '\0';
-// ),
-// SEC("raw_tp/block_rq_requeue")
-// int raw_tracepoint__block_rq_requeue(struct bpf_raw_tracepoint_args *ctx) {
-//   struct request *rq = (struct request *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-//   dev_t dev =
-//       BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tgid, tid, block_rq_requeue, block_layer);
-//   set_rq_info(task_info, rq, dev, NULL);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// TP_PROTO(struct request *rq, int error, unsigned int nr_bytes),
-// TP_fast_assign(
-// 	__entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
-// 	__entry->sector    = blk_rq_pos(rq);
-// 	__entry->nr_sector = nr_bytes >> 9;
-// 	__entry->error     = error;
-
-// 	blk_fill_rwbs(__entry->rwbs, rq->cmd_flags);
-// 	__get_str(cmd)[0] = '\0';
-// ),
 SEC("raw_tp/block_rq_complete")
 int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
   struct request *rq = (struct request *)(ctx->args[0]);
@@ -413,7 +328,7 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         if (!task_info) {
           return 0;
         }
-        set_common_info(task_info, tid, tgid, block_rq_complete, rq_info);
+        set_common_info(task_info, tid, tgid, block_rq_complete, bio_rq_association_info);
         task_info->bio_rq_association_info.dev = dev;
         task_info->bio_rq_association_info.rq = (unsigned long long)rq;
         task_info->bio_rq_association_info.bio = (unsigned long long)bio;
@@ -428,17 +343,7 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
-// TP_PROTO(struct request *rq),
-// TP_fast_assign(
-// 	__entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
-// 	__entry->sector    = blk_rq_trace_sector(rq);
-// 	__entry->nr_sector = blk_rq_trace_nr_sectors(rq);
-// 	__entry->bytes     = blk_rq_bytes(rq);
 
-// 	blk_fill_rwbs(__entry->rwbs, rq->cmd_flags);
-// 	__get_str(cmd)[0] = '\0';
-// 	memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
-// ),
 SEC("raw_tp/block_rq_insert")
 int raw_tracepoint__block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
   struct request *rq = (struct request *)(ctx->args[0]);
@@ -484,88 +389,6 @@ int raw_tracepoint__block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
-
-// SEC("raw_tp/block_rq_merge")
-// int raw_tracepoint__block_rq_merge(struct bpf_raw_tracepoint_args *ctx) {
-//   struct request *rq = (struct request *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-//   dev_t dev =
-//       BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-//   if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tid, tgid, block_rq_merge, rq_info);
-//   set_rq_comm_info(task_info, rq, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// TP_PROTO(struct request_queue *q, struct bio *bio),
-// TP_fast_assign(
-// 	__entry->dev		= bio_dev(bio);
-// 	__entry->sector		= bio->bi_iter.bi_sector;
-// 	__entry->nr_sector	= bio_sectors(bio);
-// 	__entry->error		= blk_status_to_errno(bio->bi_status);
-// 	blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
-// ),
-// SEC("raw_tp/block_bio_complete") // TODO: add support for driver that bypass mq scheme
-// int raw_tracepoint__block_bio_complete(struct bpf_raw_tracepoint_args *ctx) {
-//   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
-//   struct bio *bio = (struct bio *)(ctx->args[1]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_common_info(task_info, tid, tgid, block_bio_complete, bio_info);
-//   set_common_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// TP_PROTO(struct bio *bio)
-// TP_fast_assign(
-// 		__entry->dev		= bio_dev(bio);
-// 		__entry->sector		= bio->bi_iter.bi_sector;
-// 		__entry->nr_sector	= bio_sectors(bio);
-// 		blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
-// 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
-// 	),
-// SEC("raw_tp/block_bio_bounce")
-// int raw_tracepoint__block_bio_bounce(struct bpf_raw_tracepoint_args *ctx) {
-//   struct bio *bio = (struct bio *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-//   0); if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_comm_info(task_info, tid, tgid, block_bio_bounce, block_layer);
-//   set_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
 static inline void set_bio_rq_association_info(struct event* task_info, struct request* rq,struct bio* bio,dev_t dev){
   task_info->bio_rq_association_info.dev = dev;
   task_info->bio_rq_association_info.rq = (unsigned long long)rq;
@@ -611,51 +434,30 @@ int BPF_KPROBE(trace_rq_qos_merge,struct request_queue*q,struct request*rq,struc
   set_bio_rq_association_info(task_info, rq, bio, dev);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
-
 }
 
+SEC("kprobe/blk_mq_end_request")
+int BPF_KPROBE(trace_end_request,struct request* rq){
+  u64 id = bpf_get_current_pid_tgid();
+  pid_t tgid = id >> 32;
+  pid_t tid = id & 0xffffffff;
+  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
+  dev_t dev =
+      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
+  if (common_filter(tid, tgid, dev, 0, 0)) {
+    return 1;
+  }
+  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  if (!task_info) {
+    return 0;
+  }
+  bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, tid, tgid, blk_mq_end_request , rq_info);
+  set_rq_comm_info(task_info, rq, dev);
+  bpf_ringbuf_submit(task_info, 0);
+  return 0;
+}
 
-// SEC("raw_tp/block_bio_backmerge")
-// int raw_tracepoint__block_bio_backmerge(struct bpf_raw_tracepoint_args *ctx) {
-//   struct bio *bio = (struct bio *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-//   if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_common_info(task_info, tid, tgid, block_bio_backmerge, bio_info);
-//   set_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-
-// SEC("raw_tp/block_bio_frontmerge")
-// int raw_tracepoint__block_bio_frontmerge(struct bpf_raw_tracepoint_args *ctx) {
-//   struct bio *bio = (struct bio *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-//   if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_common_info(task_info, tid, tgid, block_bio_frontmerge, bio_info);
-//   set_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
 
 SEC("raw_tp/block_bio_queue")
 int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
@@ -699,30 +501,6 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
-// SEC("raw_tp/block_getrq")
-// int raw_tracepoint__block_getrq(struct bpf_raw_tracepoint_args *ctx) {
-//   struct bio *bio = (struct bio *)(ctx->args[0]);
-//   u64 id = bpf_get_current_pid_tgid();
-//   pid_t tgid = id >> 32;
-//   pid_t tid = id & 0xffffffff;
-//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-//   if (common_filter(tid, tgid, dev, 0, 0)) {
-//     return 1;
-//   }
-//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-//   if (!task_info) {
-//     return 0;
-//   }
-//   bpf_get_current_comm(&task_info->comm, 80);
-//   set_common_info(task_info, tid, tgid, block_getrq, bio_info);
-//   set_common_bio_info(task_info, bio, dev);
-//   bpf_ringbuf_submit(task_info, 0);
-//   return 0;
-// }
-// TP_PROTO(struct request_queue *q)
-// TP_fast_assign(
-// 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
-// 	)
 SEC("raw_tp/block_plug") //TODO:
 int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
@@ -749,11 +527,6 @@ int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
-// // TP_PROTO(struct request_queue *q, unsigned int depth, bool explicit),
-// // TP_fast_assign(
-// // 		__entry->nr_rq = depth;
-// // 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
-// // 	),
 SEC("raw_tp/block_unplug") 
 int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
@@ -782,13 +555,7 @@ int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
 }
 
 // TP_PROTO(struct bio *bio, unsigned int new_sector),
-// TP_fast_assign(
-// 	__entry->dev		= bio_dev(bio);
-// 	__entry->sector		= bio->bi_iter.bi_sector;
-// 	__entry->new_sector	= new_sector;
-// 	blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
-// 	memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
-// ),
+
 SEC("raw_tp/block_split") // TODO:
 int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
   struct bio *bio = (struct bio *)(ctx->args[0]);
@@ -810,6 +577,7 @@ int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
+
 
 // TP_PROTO(struct bio *bio, dev_t dev, sector_t from),
 // TP_fast_assign(

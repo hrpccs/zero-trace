@@ -26,6 +26,7 @@ public:
     std::vector<std::weak_ptr<Request>> relative_requests;
   };
   std::vector<Association> associations;
+  std::shared_ptr<BioObject> parent;
 
   void addAssociation(unsigned long long inode, unsigned long offset,
                       unsigned long nr_bytes) {
@@ -46,18 +47,16 @@ public:
           index.push_back(i);
         }
       } else {
-        printf("inode not match in bvec compare\n");
+        // printf("inode not match in bvec compare\n");
       }
     }
     return;
   }
-  
 };
 
 class BlockPendingDuration : public AsyncDuration {
 public:
   // void print() override {}
-
   void printfmtNtap(FILE *file, int tapnum) {
     int j = 0;
     for (auto ptr : relative_bio) {
@@ -116,7 +115,6 @@ public:
     return false;
   }
 
-
   void addBioObject(std::shared_ptr<BioObject> bio) {
     if (!isPendingAsync()) {
       auto ad = std::make_unique<BlockPendingDuration>();
@@ -131,10 +129,11 @@ public:
     }
   }
 
-  bool AddBioObjectAndBuildMapping(std::shared_ptr<BioObject> bio,std::shared_ptr<IORequest> self) {
+  bool AddBioObjectAndBuildMapping(std::shared_ptr<BioObject> bio,
+                                   std::shared_ptr<IORequest> self) {
     std::vector<int> index;
     bio->isRelative(inode, offset, nr_bytes, index);
-    if(index.empty()){
+    if (index.empty()) {
       return false;
     }
     for (auto i : index) {

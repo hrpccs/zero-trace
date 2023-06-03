@@ -31,7 +31,8 @@
   X(block_touch_buffer)                                                        \
   X(block_unplug)                                                              \
   X(rq_qos_merge)                                                              \
-  X(rq_qos_track)
+  X(rq_qos_track) \
+  X(blk_mq_end_request)
 
 #define KERNEL_HOOK_TYPE_ENUM(name) name,
 enum kernel_hook_type { KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_ENUM) };
