@@ -32,7 +32,7 @@ https://gist.github.com/MarioHewardt/5759641727aae880b29c8f715ba4d30f
 $ cmake -S src -B build
 $ cd build 
 $ make 
-$ sudo ./iotrace  ...
+$ sudo ./iotracer  -w 10.0 -o log -n "task name to trace" e.g. you can use sysbench located at runbenchmark dir.
 ```
 
 
