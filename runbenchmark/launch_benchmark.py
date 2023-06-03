@@ -1,12 +1,10 @@
 import subprocess
-
 # Launch the prepare command and print the process ID
-prepare_process = subprocess.Popen(['sysbench', '--threads=1', '--report-interval=4', '--time=300', '--test=fileio', '--file-num=4', '--file-total-size=1G', '--file-test-mode=rndrw', 'prepare'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+prepare_process = subprocess.Popen(['sysbench', '--threads=8', '--report-interval=4', '--time=300', '--test=fileio', '--file-num=4', '--file-total-size=10G', '--file-test-mode=rndrw', 'prepare'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 print("Prepare process ID:", prepare_process.pid)
 prepare_process.wait()
 
-# Launch the run command and print the process ID
-run_process = subprocess.Popen(['sysbench', '--threads=1', '--report-interval=4', '--time=300', '--test=fileio', '--file-num=4', '--file-total-size=1G', '--file-test-mode=rndrw', 'run'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+run_process = subprocess.Popen(['sysbench', '--threads=8', '--report-interval=4', '--time=60', '--test=fileio', '--file-num=4', '--file-total-size=10G', '--file-test-mode=rndrw', 'run'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 print("Run process ID:", run_process.pid)
 run_process.wait()
 

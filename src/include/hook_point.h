@@ -31,8 +31,9 @@
   X(block_touch_buffer)                                                        \
   X(block_unplug)                                                              \
   X(rq_qos_merge)                                                              \
-  X(rq_qos_track) \
-  X(blk_mq_end_request)
+  X(rq_qos_track)                                                              \
+  X(rq_qos_done) \
+  X(rq_qos_requeue) \
 
 #define KERNEL_HOOK_TYPE_ENUM(name) name,
 enum kernel_hook_type { KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_ENUM) };
@@ -44,11 +45,10 @@ static const char *kernel_hook_type_str[] = {
 #define LAYER_DEF(X)                                                           \
   X(vfs_layer)                                                                 \
   X(bio_info)                                                                  \
-  X(rq_info) \
-  X(bio_rq_association_info) \
-  X(rq_plug_info) \
+  X(rq_info)                                                                   \
+  X(bio_rq_association_info)                                                   \
+  X(rq_plug_info)                                                              \
   X(bio_bvec_info)
-
 
 #define LAYER_ENUM(name) name,
 enum info_type { LAYER_DEF(LAYER_ENUM) };

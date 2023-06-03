@@ -5,6 +5,7 @@
 #include "io_event.h"
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -16,15 +17,16 @@ struct TraceConfig {
   TraceConfig &operator=(TraceConfig &&) = default;
   TraceConfig(unsigned long pid, unsigned long tid, std::filesystem::path dev,
               unsigned long ino, unsigned long long dir_ino,
-              double time_threshold, std::filesystem::path output_path)
+              double time_threshold, std::filesystem::path output_path,std::string command)
       : pid(pid), tid(tid), dev(std::move(dev)), ino(ino), dir_ino(dir_ino),
-        time_threshold(time_threshold), output_path(std::move(output_path)) {}
+        time_threshold(time_threshold), output_path(std::move(output_path)), command(std::move(command)) {}
   // trace target
   unsigned long pid;
   unsigned long tid;
   std::filesystem::path dev;
   unsigned long ino;
   unsigned long long dir_ino;
+  std::string command;
 
   // trigger threshold
   double time_threshold;

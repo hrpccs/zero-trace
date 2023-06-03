@@ -3,7 +3,6 @@
 #include "bpf/bpf_helpers.h"
 #include "bpf/bpf_tracing.h"
 #include "event_defs.h"
-#include "filter.h"
 #include "hook_point.h"
 #include "system_macro.h"
 
@@ -12,7 +11,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 1 << 16);
+  __uint(max_entries, 1 << 20);
 } rb SEC(".maps");
 
 
@@ -21,7 +20,8 @@ unsigned int target_tid = 0;                    // tid
 unsigned long long target_file_inode = 0;       // file inode
 unsigned long long target_direrctory_inode = 0; // directory inode
 unsigned long target_dev = 0;                   // device
-char task_name[40] = {0};
+char command[MAX_COMM_LEN] = {0};
+unsigned int command_len = 0;
 
 // Force emitting struct event into the ELF.
 const struct event *unused __attribute__((unused));
@@ -66,11 +66,14 @@ static inline int common_filter(pid_t tid, pid_t tgid, dev_t dev, ino_t inode,
 }
 
 static inline int task_comm_filter(char *comm) {
+  if(command_len == 0){
+    return 0;
+  }
   for (int i = 0; i < MAX_COMM_LEN; i++) {
     if (comm[i] == '\0') {
       break;
     }
-    if (comm[i] != task_name[i]) {
+    if (comm[i] != command[i]) {
       return 1;
     }
   }
@@ -125,7 +128,11 @@ int BPF_PROG(enter_vfs_read) {
     return 0;
   }
   // struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-  bpf_get_current_comm(&task_info->comm, 80);
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_read_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -161,8 +168,11 @@ int BPF_PROG(exit_vfs_read) {
   if (!task_info) {
     return 0;
   }
-
-  bpf_get_current_comm(&task_info->comm, 80);
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_read_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
@@ -200,8 +210,11 @@ int BPF_PROG(enter_vfs_write) {
   if (!task_info) {
     return 0;
   }
-
-  bpf_get_current_comm(&task_info->comm, 80);
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_write_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -236,8 +249,11 @@ int BPF_PROG(exit_vfs_write) {
   if (!task_info) {
     return 0;
   }
-
-  bpf_get_current_comm(&task_info->comm, 80);
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_write_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
@@ -282,18 +298,6 @@ static inline void set_common_bio_info(struct event *task_info, struct bio *bio,
   task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
 }
 
-static inline void set_split_bio_info(struct event *task_info, struct bio *bio,
-                                      dev_t dev) {
-  task_info->bio_info.bio = (unsigned long long)bio;
-  task_info->bio_info.dev = dev;
-  task_info->bio_info.bio_info_type = split_bio;
-  struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
-  task_info->bio_info.bvec_idx_start = bi_iter.bi_idx;
-  struct bio *parent_bio = BPF_CORE_READ(bio, bi_private);
-  task_info->bio_info.parent_bio = (unsigned long long)parent_bio;
-  bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
-  task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
-}
 
 SEC("raw_tp/block_rq_complete")
 int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
@@ -393,10 +397,11 @@ static inline void set_bio_rq_association_info(struct event* task_info, struct r
   task_info->bio_rq_association_info.dev = dev;
   task_info->bio_rq_association_info.rq = (unsigned long long)rq;
   task_info->bio_rq_association_info.bio = (unsigned long long)bio;
+  task_info->bio_rq_association_info.request_queue = (unsigned long long)BPF_CORE_READ(rq, q);
 }
 
 SEC("kprobe/__rq_qos_track")
-int BPF_KPROBE(trace_rq_qos_track,struct request_queue*q,struct request*rq,struct bio* bio){
+int BPF_KPROBE(trace_rq_qos_track,struct rq_qos*q,struct request*rq,struct bio* bio){
   u64 id = bpf_get_current_pid_tgid();
   pid_t tgid = id >> 32;
   pid_t tid = id & 0xffffffff;
@@ -417,7 +422,7 @@ int BPF_KPROBE(trace_rq_qos_track,struct request_queue*q,struct request*rq,struc
 
 
 SEC("kprobe/__rq_qos_merge")
-int BPF_KPROBE(trace_rq_qos_merge,struct request_queue*q,struct request*rq,struct bio* bio){
+int BPF_KPROBE(trace_rq_qos_merge,struct rq_qos*q,struct request*rq,struct bio* bio){
   u64 id = bpf_get_current_pid_tgid();
   pid_t tgid = id >> 32;
   pid_t tid = id & 0xffffffff;
@@ -430,14 +435,14 @@ int BPF_KPROBE(trace_rq_qos_merge,struct request_queue*q,struct request*rq,struc
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, rq_qos_track, bio_rq_association_info);
+  set_common_info(task_info, tid, tgid, rq_qos_merge, bio_rq_association_info);
   set_bio_rq_association_info(task_info, rq, bio, dev);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
 
-SEC("kprobe/blk_mq_end_request")
-int BPF_KPROBE(trace_end_request,struct request* rq){
+SEC("kprobe/__rq_qos_done")
+int BPF_KPROBE(trace_rq_qos_done,struct rq_qos*q,struct request*rq){
   u64 id = bpf_get_current_pid_tgid();
   pid_t tgid = id >> 32;
   pid_t tid = id & 0xffffffff;
@@ -452,11 +457,34 @@ int BPF_KPROBE(trace_end_request,struct request* rq){
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, blk_mq_end_request , rq_info);
+  set_common_info(task_info, tid, tgid, rq_qos_done , rq_info);
   set_rq_comm_info(task_info, rq, dev);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
+
+SEC("kprobe/__rq_qos_requeue")
+int BPF_KPROBE(trace_rq_qos_requeue,struct rq_qos*q,struct request*rq){
+  u64 id = bpf_get_current_pid_tgid();
+  pid_t tgid = id >> 32;
+  pid_t tid = id & 0xffffffff;
+  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
+  dev_t dev =
+      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
+  if (common_filter(tid, tgid, dev, 0, 0)) {
+    return 1;
+  }
+  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  if (!task_info) {
+    return 0;
+  }
+  bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, tid, tgid, rq_qos_requeue , rq_info);
+  set_rq_comm_info(task_info, rq, dev);
+  bpf_ringbuf_submit(task_info, 0);
+  return 0;
+}
+
 
 
 SEC("raw_tp/block_bio_queue")
@@ -478,6 +506,7 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
   task_info->bio_info.bio = (unsigned long long)bio;
   task_info->bio_info.dev = dev;
   task_info->bio_info.bio_info_type = queue_first_bio;
+  task_info->bio_info.bio_op = BPF_CORE_READ(bio, bi_opf);
   unsigned int bvec_cnt = BPF_CORE_READ(bio, bi_vcnt);
   struct bvec_array_info* bvecs = bpf_ringbuf_reserve(&rb, sizeof(struct bvec_array_info), 0);
   if(bvecs == NULL){
@@ -564,16 +593,29 @@ int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
   pid_t tgid = id >> 32;
   pid_t tid = id & 0xffffffff;
   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
+  // if (common_filter(tid, tgid, dev, 0, 0)) {
+  //   return 1;
+  // }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
   set_common_info(task_info, tid, tgid, block_split, bio_info);
-  set_split_bio_info(task_info, bio, dev);
+  task_info->bio_info.bio = (unsigned long long)bio;
+  task_info->bio_info.dev = dev;
+  task_info->bio_info.bio_info_type = split_bio;
+  task_info->bio_info.bio_op = BPF_CORE_READ(bio, bi_opf);
+  struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
+  task_info->bio_info.bvec_idx_start = bi_iter.bi_idx;
+  struct bio *parent_bio = BPF_CORE_READ(bio, bi_private);
+  if(parent_bio == NULL){
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
+  task_info->bio_info.parent_bio = (unsigned long long)parent_bio;
+  bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
+  task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }

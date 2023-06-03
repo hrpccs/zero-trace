@@ -42,7 +42,7 @@ class AsyncObject {
 public:
   virtual void print() = 0;
   std::vector<std::shared_ptr<SyncEvent>> relative_events;
-  void addRelativeEvent(std::shared_ptr<SyncEvent> event) {
+  virtual void addRelativeEvent(std::shared_ptr<SyncEvent> event) {
     relative_events.push_back(event);
   }
 };

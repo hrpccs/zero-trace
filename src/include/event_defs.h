@@ -46,6 +46,7 @@ struct event {
       unsigned long dev;
       unsigned short bvec_idx_start;
       unsigned short bvec_idx_end;
+      unsigned long bio_op;
     } bio_info; // 对于 bio 的 split，queue，end 事件。
     struct {
       unsigned long dev;

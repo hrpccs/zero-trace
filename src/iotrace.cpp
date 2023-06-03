@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <bpf/libbpf.h>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <getopt.h>
 #include <memory>
@@ -87,13 +88,14 @@ void parse_args(int argc, char **argv) {
   unsigned long long file = 0;
   unsigned long long directory = 0;
   char *output = NULL;
+  std::string command;
 
   double time_threshold = 1.0;
 
   printf("Parsing arguments\n");
   output_file = stdout;
 
-  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w")) != -1) {
+  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w:n:h")) != -1) {
     switch (opt) {
     case 'p':
       pid = atoi(optarg);
@@ -124,10 +126,15 @@ void parse_args(int argc, char **argv) {
     case 'w':
       time_threshold = atof(optarg);
       break;
+    case 'n':
+      command = std::string(optarg);
+      std::strcpy(skel->bss->command, command.c_str());
+      skel->bss->command_len = command.length();
+      break;
     default:
       fprintf(stderr,
               "Usage: %s [-p pid] [-t tgid] [-d dev] [-c cgroup] [-f file] [-D "
-              "directory] [-o output]\n",
+              "directory] [-o output] [-t time threshold] [-n command to trace]\n",
               argv[0]);
       exit(EXIT_FAILURE);
     }
@@ -144,7 +151,7 @@ void parse_args(int argc, char **argv) {
 
   TraceConfig config =
       TraceConfig(pid, tid, std::move(dev_path), file, directory,
-                  time_threshold, std::move(output_path));
+                  time_threshold, std::move(output_path), std::move(command));
 
   // Do something with the parsed arguments
   // #ifdef CONFIG_BLK_CGROUP

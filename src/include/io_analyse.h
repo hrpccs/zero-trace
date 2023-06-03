@@ -16,7 +16,7 @@
 
 class IOEndHandler : public DoneRequestHandler {
 public:
-  IOEndHandler(TraceConfig&& config) : DoneRequestHandler(std::move(config)) {
+  IOEndHandler(TraceConfig &&config) : DoneRequestHandler(std::move(config)) {
     std::filesystem::path &output_path = this->config.output_path;
     printf("IOEndHandler: open output file %s\n", output_path.c_str());
     if (!output_path.empty()) {
@@ -109,9 +109,10 @@ public:
     // leave request_object weak ptr in request_queue_object
   }
 
-  void processBioQueue1(unsigned long long bio) {
+  void processBioQueue1(unsigned long long bio, unsigned long bio_op) {
     // 覆盖
     auto bio_object = std::make_shared<BioObject>();
+    bio_object->setBioOp(bio_op);
     bio_map[bio] = bio_object;
     // add bio but not with bvec
   }
@@ -144,20 +145,28 @@ public:
       return false;
     }
     auto parent_bio_object = bio_map[parent_bio];
-    if (bio_map.find(bio) != bio_map.end()) {
-      return false;
-    }
+    // if (bio_map.find(bio) != bio_map.end()) {
+    //   return false;
+    // }
     auto child_bio_object = std::make_shared<BioObject>(); // update bio_map
     child_bio_object->parent = parent_bio_object;
+    child_bio_object->setBioOp(parent_bio_object->bio_op);
     bio_map[bio] = child_bio_object;
     // add bio to relative request base on bvec_idx
     bvec_idx_end = bvec_idx_end >= parent_bio_object->associations.size()
                        ? parent_bio_object->associations.size() - 1
                        : bvec_idx_end;
+    // printf("bvec_idx_start %d, bvec_idx_end %d\n", bvec_idx_start,
+    //        bvec_idx_end);
+    // printf("parent_bio_object->associations.size() %ld\n",
+          //  parent_bio_object->associations.size());
     for (int i = bvec_idx_start; i <= bvec_idx_end; i++) {
       auto &association = parent_bio_object->associations[i];
       for (auto &request_object : association.relative_requests) {
-        assert(request_object.expired() == false && "request not done yet");
+        // assert(request_object.expired() == false && "request not done yet");
+        if (request_object.expired()) {
+          continue;
+        }
         auto request = request_object.lock();
         auto io_request = std::dynamic_pointer_cast<IORequest>(request);
         io_request->addBioObject(child_bio_object);
@@ -207,7 +216,11 @@ public:
           rmIndex.push_back(i);
         } else {
           auto bio = bio_objects[i].lock();
-          bio->addRelativeEvent(event);
+          if (!bio->bioIsDone()) {
+            bio->addRelativeEvent(event);
+          } else {
+            rmIndex.push_back(i); // bio is done, remove the ptr
+          }
         }
       }
       for (int i = rmIndex.size() - 1; i >= 0; i--) {
