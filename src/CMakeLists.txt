@@ -8,7 +8,7 @@ project(iotracer)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_COMPILER "clang")
 
-# Set the C++ standard to C++11
+# Set the C++ standard to C++17
 set(CMAKE_CXX_STANDARD 17)
 
 # Set the compiler for C++ files to clang++
@@ -20,7 +20,8 @@ file(GLOB_RECURSE CPP_SOURCES "*.cpp")
 
 # Add the C and C++ sources to the project
 add_executable(iotracer  ${CPP_SOURCES})
-include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include /usr/include)
+# include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include /usr/include)
+include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include)
 
 add_dependencies(iotracer iotrace_skel)
 

@@ -151,7 +151,7 @@ void parse_args(int argc, char **argv) {
 
   TraceConfig config =
       TraceConfig(pid, tid, std::move(dev_path), file, directory,
-                  time_threshold, std::move(output_path), std::move(command));
+                  time_threshold, std::move(output_path), std::move(command),skel);
 
   // Do something with the parsed arguments
   // #ifdef CONFIG_BLK_CGROUP

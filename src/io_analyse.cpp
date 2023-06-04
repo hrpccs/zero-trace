@@ -14,6 +14,12 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   assert(outputFile != nullptr);
   IORequest *iorequest = dynamic_cast<IORequest *>(request.get());
   assert(iorequest != nullptr);
+  if(inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()){
+    std::string path;
+    readAbsPath(iorequest->inode, path);
+    inode_abs_path_map[iorequest->inode] = path;
+  }
+  printf("%s with pid %d tid %d  has inode %lld with path %s\n", iorequest->comm.c_str(),iorequest->pid,iorequest->tid, iorequest->inode, inode_abs_path_map[iorequest->inode].c_str());
   unsigned long long start, end;
   if (auto startEvent =
           dynamic_cast<SyncEvent *>(iorequest->events.front().get())) {
@@ -47,8 +53,8 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   }
 
   int tapnum = 0;
-  fprintf(outputFile, "start print request %lld totol time %lf\n",
-          iorequest->id, duration_ms);
+  fprintf(outputFile, "start print request %lld total time %lf target file path %s\n",
+          iorequest->id, duration_ms,inode_abs_path_map[iorequest->inode].c_str());
   for (int i = 0; i < iorequest->events.size(); i++) {
     Event *e = iorequest->events[i].get();
     if (auto syncevent = dynamic_cast<SyncEvent *>(e)) {
@@ -73,7 +79,7 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
 }
 
 void IOAnalyser::processVfsEntry(struct event *&e,
-                           std::unique_ptr<SyncEvent> &event) {
+                                 std::unique_ptr<SyncEvent> &event) {
   event->type = SyncEvent::EXIT;
   for (int i = pending_requests.size() - 1; i >= 0; i--) {
     auto io_request = pending_requests[i];
@@ -156,7 +162,7 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
         event->type = SyncEvent::ENTER;
         auto io_request = std::make_shared<IORequest>(
             e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
-            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes);
+            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes,std::string(e->comm));
         AddRequest(io_request);
         io_request->AddEvent(std::move(event));
       } else if (e->event_type == vfs_read_exit ||

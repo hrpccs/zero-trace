@@ -14,6 +14,26 @@ struct {
   __uint(max_entries, 1 << 20);
 } rb SEC(".maps");
 
+// hash map for abs path of each inode
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 1 << 20);
+  __type(key, ino_t);
+  __type(value, struct abs_path);
+} ino_path_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, u32);
+    __type(value, struct abs_path);
+    //   .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    // .key_size = sizeof(u32),
+    // .value_size = PATH_MAX,
+    // .max_entries = 1,
+} tmp_abs_path SEC(".maps");
+
+
 
 unsigned int target_tgid = 0;                   // pid
 unsigned int target_tid = 0;                    // tid
@@ -101,6 +121,52 @@ static inline void set_fs_info(struct event *task_info, ino_t inode,
   task_info->vfs_layer_info.dir_inode = dir_inode;
 }
 
+static inline struct mount *get_real_mount(struct vfsmount *vfsmount)
+{
+	void *mnt = (void *)vfsmount;
+	return (struct mount *)(mnt - (unsigned long)(&((struct mount *)0)->mnt));
+}
+
+static inline int read_and_store_abs_path(struct path *p, ino_t *inode) {
+        struct dentry *dentry = p->dentry;
+        struct dentry *parent = NULL;
+        struct qstr dname = BPF_CORE_READ(dentry, d_name);
+        struct vfsmount *vfsmnt = p->mnt;
+        struct mount *mnt = NULL;
+        // read abs path of share lib , inspired by d_path() kernel function
+        // MAXLEN_VMA_NAME = 2^n;
+        u32 key = 0;
+        struct abs_path *tp = bpf_map_lookup_elem(&tmp_abs_path, &key);
+        if (tp == NULL) {
+    return 1;
+        }
+        for (int k = MAX_LEVEL - 1, idx = k; k >= 0; k--) {
+    bpf_probe_read_kernel_str(&tp->name[idx][0],
+                              (dname.len + 5) & (MAXLEN_VMA_NAME - 1),
+                              dname.name); // weak ptr offset
+    if (tp->name[idx][0] == '/') {         // is root
+      mnt = get_real_mount(vfsmnt);
+      struct mount *parent_mnt = BPF_CORE_READ(mnt, mnt_parent);
+	  tp->name[idx][0] = '\0';
+      if (parent_mnt == mnt) {
+        break;
+      }
+      vfsmnt = &(parent_mnt->mnt);
+      parent = BPF_CORE_READ(parent_mnt, mnt_mountpoint);
+    } else {
+      parent = BPF_CORE_READ(dentry, d_parent);
+      if (parent == dentry) {
+        break;
+      }
+      idx--;
+    }
+    dentry = parent;
+    dname = BPF_CORE_READ(dentry, d_name);
+        }
+        bpf_map_update_elem(&ino_path_map, inode, tp, BPF_ANY);
+        return 0;
+}
+
 SEC("fentry/vfs_read")
 // int BPF_PROG(enter_vfs_read, struct file* file, char *buf, size_t count,
 // loff_t *pos){
@@ -109,6 +175,9 @@ int BPF_PROG(enter_vfs_read) {
   size_t count = 0;
   loff_t *pos = NULL;
   bpf_probe_read(&file, sizeof(struct file *), ctx + 0);
+  if(BPF_CORE_READ(file,f_op,read_iter) == NULL){
+    return 0;
+  }
   bpf_probe_read(&count, sizeof(size_t), ctx + 2);
   bpf_probe_read(&pos, sizeof(loff_t *), ctx + 3);
   u64 id = bpf_get_current_pid_tgid();
@@ -133,6 +202,12 @@ int BPF_PROG(enter_vfs_read) {
     bpf_ringbuf_discard(task_info, 0);
     return 0;
   }
+  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+    if(!read_and_store_abs_path(&p,&i_ino)){
+      goto go_on;
+    }
+  }
+go_on:;
   set_common_info(task_info, tgid, tid, vfs_read_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -192,6 +267,9 @@ int BPF_PROG(enter_vfs_write) {
   size_t count = 0;
   loff_t *pos = NULL;
   bpf_probe_read(&file, sizeof(struct file *), ctx + 0);
+  if(BPF_CORE_READ(file,f_op,write_iter) == NULL){
+    return 0;
+  }
   bpf_probe_read(&count, sizeof(size_t), ctx + 2);
   bpf_probe_read(&pos, sizeof(loff_t *), ctx + 3);
   u64 id = bpf_get_current_pid_tgid();
@@ -215,6 +293,12 @@ int BPF_PROG(enter_vfs_write) {
     bpf_ringbuf_discard(task_info, 0);
     return 0;
   }
+  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+    if(!read_and_store_abs_path(&p,&i_ino)){
+      goto go_on;
+    }
+  }
+go_on:;
   set_common_info(task_info, tgid, tid, vfs_write_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -267,6 +351,8 @@ int BPF_PROG(exit_vfs_write) {
   return 0;
 }
 
+
+
 static inline bool rq_is_passthrough(unsigned int rq_cmd_flags) {
   if (rq_cmd_flags & REQ_OP_MASK) {
     unsigned int op = rq_cmd_flags & REQ_OP_MASK;
@@ -282,7 +368,6 @@ static inline void set_rq_comm_info(struct event *task_info, struct request *rq,
   task_info->rq_info.dev = dev;
   task_info->rq_info.rq = (unsigned long long)rq;
   task_info->rq_info.request_queue = (unsigned long long)BPF_CORE_READ(rq,q);
-
 }
 
 

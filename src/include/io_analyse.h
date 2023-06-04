@@ -1,12 +1,15 @@
 #pragma once
 
+#include "bpf/bpf.h"
 #include "analyse.h"
 #include "basic_event.h"
 #include "cstdio"
 #include "event_defs.h"
 #include "hook_point.h"
 #include "io_event.h"
+#include "iotrace.skel.h"
 #include "vector"
+#include <bpf/libbpf.h>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -35,8 +38,48 @@ public:
       fclose(outputFile);
     }
   }
+
+  void readAbsPath(unsigned long long inode, std::string &path) {
+    // get abs path from bpf map
+    struct iotrace_bpf *skel = config.skel;
+    int map_fd =
+        bpf_object__find_map_fd_by_name(skel->obj, "ino_path_map");
+    if (map_fd < 0) {
+      printf("IOEndHandler: failed to get ino_path_map\n");
+      return;
+    }
+    struct abs_path abs_path = {};
+    int ret = bpf_map_lookup_elem(map_fd, &inode, &abs_path);
+    if (ret) {
+      printf("IOEndHandler: failed to get abs path for inode %lld\n", inode);
+    }
+    path = "";
+    bool rootPath = false;
+    for (int level = 0; level < MAX_LEVEL; level++) {
+      if(level == 0){
+        if(abs_path.name[level][0] == '/'){
+          rootPath = true;
+        }
+      }
+      // if (abs_path.name[level][0] == '\0' ) {
+      //   continue;
+      // }
+      // if(abs_path.name[level][0] == '/') {
+      //   path = abs_path.name[level];
+      //   continue;
+      // }else{
+      // path += "/";
+      // }
+      path += ":";
+      path += abs_path.name[level];
+    }
+    printf("abs path for inode %lld is %s\n", inode, path.c_str());
+  }
+
   void HandleDoneRequest(std::shared_ptr<Request>) override;
   FILE *outputFile;
+
+  std::map<unsigned long long, std::string> inode_abs_path_map;
 };
 
 class IOAnalyser : public Analyser {
@@ -160,7 +203,7 @@ public:
     // printf("bvec_idx_start %d, bvec_idx_end %d\n", bvec_idx_start,
     //        bvec_idx_end);
     // printf("parent_bio_object->associations.size() %ld\n",
-          //  parent_bio_object->associations.size());
+    //  parent_bio_object->associations.size());
     for (int i = bvec_idx_start; i <= bvec_idx_end; i++) {
       auto &association = parent_bio_object->associations[i];
       for (auto &request_object : association.relative_requests) {

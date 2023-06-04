@@ -102,9 +102,9 @@ class IORequest : public Request {
 public:
   IORequest(unsigned long pid, unsigned long tid, unsigned long long inode,
             unsigned long long dev, unsigned long offset,
-            unsigned long nr_bytes)
+            unsigned long nr_bytes, std::string comm)
       : pid(pid), tid(tid), inode(inode), dev(dev), offset(offset),
-        nr_bytes(nr_bytes) {}
+        nr_bytes(nr_bytes) ,comm(comm){}
   bool isPendingAsync();
 
   bool isRelative(unsigned long long inode, unsigned long long offset,
@@ -118,7 +118,6 @@ public:
   bool AddBioObjectAndBuildMapping(std::shared_ptr<BioObject> bio,
                                    std::shared_ptr<IORequest> self);
 
-private:
   // identity
   unsigned long pid;
   unsigned long tid;
@@ -126,4 +125,5 @@ private:
   unsigned long long dev;      // target device
   unsigned long long offset;   // RW offset
   unsigned long long nr_bytes; // RW size
+  std::string comm;
 };

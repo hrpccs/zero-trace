@@ -17,9 +17,14 @@ struct TraceConfig {
   TraceConfig &operator=(TraceConfig &&) = default;
   TraceConfig(unsigned long pid, unsigned long tid, std::filesystem::path dev,
               unsigned long ino, unsigned long long dir_ino,
-              double time_threshold, std::filesystem::path output_path,std::string command)
+              double time_threshold, std::filesystem::path output_path,
+              std::string command, struct iotrace_bpf *skel)
       : pid(pid), tid(tid), dev(std::move(dev)), ino(ino), dir_ino(dir_ino),
-        time_threshold(time_threshold), output_path(std::move(output_path)), command(std::move(command)) {}
+        time_threshold(time_threshold), output_path(std::move(output_path)),
+        command(std::move(command)), skel(skel) {}
+
+  // ebpf skel
+  struct iotrace_bpf *skel;
   // trace target
   unsigned long pid;
   unsigned long tid;
@@ -47,7 +52,8 @@ struct TraceConfig {
 
 class DoneRequestHandler {
 public:
-  explicit DoneRequestHandler(TraceConfig&& config) : config(std::move(config)) {}
+  explicit DoneRequestHandler(TraceConfig &&config)
+      : config(std::move(config)) {}
   virtual void HandleDoneRequest(std::shared_ptr<Request>) = 0;
   //
   TraceConfig config;
@@ -59,7 +65,7 @@ public:
     this->SetDoneRequestHandler(std::move(handler));
   }
   ~Analyser() {}
-  virtual void AddTrace(void *data,size_t data_size) = 0;
+  virtual void AddTrace(void *data, size_t data_size) = 0;
   void DoneRequest(std::shared_ptr<Request> req) {
     done_request_handler->HandleDoneRequest(req);
   }
