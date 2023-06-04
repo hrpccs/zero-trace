@@ -5,7 +5,7 @@
 #define MAX_BIO_PER_RQ 31
 #define MAX_BVEC_PER_BIO 255
 #define MAXLEN_VMA_NAME 64
-#define MAX_LEVEL 10
+#define MAX_LEVEL 8 
 
 struct bvec {
   unsigned long long inode;
@@ -22,6 +22,10 @@ struct bvec_array_info {
 
 struct abs_path {
   char name[MAX_LEVEL][MAXLEN_VMA_NAME+1];	//abslote object file path
+  char disk_name[40];
+  int partno;
+  int has_root;
+  unsigned long long inode;
 };
 
 enum bio_info_type {

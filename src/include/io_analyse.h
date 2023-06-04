@@ -11,6 +11,7 @@
 #include "vector"
 #include <bpf/libbpf.h>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <stddef.h>
@@ -39,46 +40,31 @@ public:
     }
   }
 
-  void readAbsPath(unsigned long long inode, std::string &path) {
+  void readAbsPath(unsigned long long inode, std::string &path,struct abs_path &abs_path) {
     // get abs path from bpf map
     struct iotrace_bpf *skel = config.skel;
-    int map_fd =
-        bpf_object__find_map_fd_by_name(skel->obj, "ino_path_map");
-    if (map_fd < 0) {
-      printf("IOEndHandler: failed to get ino_path_map\n");
-      return;
-    }
-    struct abs_path abs_path = {};
-    int ret = bpf_map_lookup_elem(map_fd, &inode, &abs_path);
-    if (ret) {
-      printf("IOEndHandler: failed to get abs path for inode %lld\n", inode);
-    }
     path = "";
-    bool rootPath = false;
     for (int level = 0; level < MAX_LEVEL; level++) {
-      if(level == 0){
-        if(abs_path.name[level][0] == '/'){
-          rootPath = true;
-        }
+      if (abs_path.name[level][0] == '\0' ) {
+        continue;
       }
-      // if (abs_path.name[level][0] == '\0' ) {
-      //   continue;
-      // }
       // if(abs_path.name[level][0] == '/') {
       //   path = abs_path.name[level];
       //   continue;
       // }else{
       // path += "/";
       // }
-      path += ":";
-      path += abs_path.name[level];
+      if(abs_path.has_root){
+        path += "/";
+        path += abs_path.name[level];
+      }
     }
-    printf("abs path for inode %lld is %s\n", inode, path.c_str());
+    // printf("abs path for inode %lld is %s\n", inode, path.c_str());
   }
 
+  void addInfo(void* data, size_t data_size) override;
   void HandleDoneRequest(std::shared_ptr<Request>) override;
   FILE *outputFile;
-
   std::map<unsigned long long, std::string> inode_abs_path_map;
 };
 

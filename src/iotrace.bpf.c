@@ -19,7 +19,7 @@ struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __uint(max_entries, 1 << 20);
   __type(key, ino_t);
-  __type(value, struct abs_path);
+  __type(value,int);
 } ino_path_map SEC(".maps");
 
 struct {
@@ -127,7 +127,8 @@ static inline struct mount *get_real_mount(struct vfsmount *vfsmount)
 	return (struct mount *)(mnt - (unsigned long)(&((struct mount *)0)->mnt));
 }
 
-static inline int read_and_store_abs_path(struct path *p, ino_t *inode) {
+static inline int read_and_store_abs_path(struct path *p, ino_t *inode,
+                                          struct block_device* s_bdev) {
         struct dentry *dentry = p->dentry;
         struct dentry *parent = NULL;
         struct qstr dname = BPF_CORE_READ(dentry, d_name);
@@ -136,10 +137,13 @@ static inline int read_and_store_abs_path(struct path *p, ino_t *inode) {
         // read abs path of share lib , inspired by d_path() kernel function
         // MAXLEN_VMA_NAME = 2^n;
         u32 key = 0;
-        struct abs_path *tp = bpf_map_lookup_elem(&tmp_abs_path, &key);
+        // struct abs_path *tp = bpf_map_lookup_elem(&tmp_abs_path, &key);
+        struct abs_path *tp = bpf_ringbuf_reserve(&rb, sizeof(*tp), 0);
         if (tp == NULL) {
     return 1;
         }
+		struct gendisk* disk = BPF_CORE_READ(s_bdev,bd_disk);
+		tp->has_root = 0;
         for (int k = MAX_LEVEL - 1, idx = k; k >= 0; k--) {
     bpf_probe_read_kernel_str(&tp->name[idx][0],
                               (dname.len + 5) & (MAXLEN_VMA_NAME - 1),
@@ -147,10 +151,11 @@ static inline int read_and_store_abs_path(struct path *p, ino_t *inode) {
     if (tp->name[idx][0] == '/') {         // is root
       mnt = get_real_mount(vfsmnt);
       struct mount *parent_mnt = BPF_CORE_READ(mnt, mnt_parent);
-	  tp->name[idx][0] = '\0';
+      tp->name[idx][0] = '\0';
       if (parent_mnt == mnt) {
         break;
       }
+	  tp->has_root = 1;
       vfsmnt = &(parent_mnt->mnt);
       parent = BPF_CORE_READ(parent_mnt, mnt_mountpoint);
     } else {
@@ -163,7 +168,12 @@ static inline int read_and_store_abs_path(struct path *p, ino_t *inode) {
     dentry = parent;
     dname = BPF_CORE_READ(dentry, d_name);
         }
-        bpf_map_update_elem(&ino_path_map, inode, tp, BPF_ANY);
+    bpf_probe_read_kernel_str(&tp->disk_name[0], 40, BPF_CORE_READ(disk, disk_name));
+	tp->partno = BPF_CORE_READ(s_bdev, bd_partno);
+  tp->inode = *inode;
+  int a = 1;
+        bpf_map_update_elem(&ino_path_map, inode, &a, BPF_ANY);
+        bpf_ringbuf_submit(tp, 0);
         return 0;
 }
 
@@ -203,7 +213,7 @@ int BPF_PROG(enter_vfs_read) {
     return 0;
   }
   if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-    if(!read_and_store_abs_path(&p,&i_ino)){
+    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
       goto go_on;
     }
   }
@@ -261,6 +271,13 @@ int BPF_PROG(exit_vfs_read) {
   return 0;
 }
 
+// SEC("fentry/filemap_get_pages")
+// int BPF_PROG(enter_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
+// 		struct pagevec *pvec){
+
+// }
+
+
 SEC("fentry/vfs_write")
 int BPF_PROG(enter_vfs_write) {
   struct file *file = NULL;
@@ -294,7 +311,7 @@ int BPF_PROG(enter_vfs_write) {
     return 0;
   }
   if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-    if(!read_and_store_abs_path(&p,&i_ino)){
+    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
       goto go_on;
     }
   }

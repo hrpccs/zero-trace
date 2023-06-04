@@ -10,16 +10,20 @@ double timestamp2ms(unsigned long long timestamp) {
   return timestamp / 1000000.0;
 }
 
+void IOEndHandler::addInfo(void *data, size_t data_size) {
+  if(data_size == sizeof(struct abs_path)){
+    struct abs_path *abs_path = (struct abs_path *)data;
+    // printf("IOAnalyser::AddTrace: abs_path %s\n", path->path);
+    std::string path;
+    readAbsPath(abs_path->inode, path,*abs_path);
+    inode_abs_path_map[abs_path->inode] = path;
+  }
+}
+
 void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   assert(outputFile != nullptr);
   IORequest *iorequest = dynamic_cast<IORequest *>(request.get());
   assert(iorequest != nullptr);
-  if(inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()){
-    std::string path;
-    readAbsPath(iorequest->inode, path);
-    inode_abs_path_map[iorequest->inode] = path;
-  }
-  printf("%s with pid %d tid %d  has inode %lld with path %s\n", iorequest->comm.c_str(),iorequest->pid,iorequest->tid, iorequest->inode, inode_abs_path_map[iorequest->inode].c_str());
   unsigned long long start, end;
   if (auto startEvent =
           dynamic_cast<SyncEvent *>(iorequest->events.front().get())) {
@@ -53,8 +57,17 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   }
 
   int tapnum = 0;
-  fprintf(outputFile, "start print request %lld total time %lf target file path %s\n",
-          iorequest->id, duration_ms,inode_abs_path_map[iorequest->inode].c_str());
+  if(inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()){
+    fprintf(outputFile,
+          "task %s  request %lld total time %lf \ttarget file inode %lld path %s\n",
+          iorequest->comm.c_str(), iorequest->id, duration_ms, iorequest->inode,
+          "unknown");
+  }else{
+    fprintf(outputFile,
+          "task %s  request %lld total time %lf \ttarget file inode %lld path %s\n",
+          iorequest->comm.c_str(), iorequest->id, duration_ms, iorequest->inode,
+          inode_abs_path_map[iorequest->inode].c_str());
+  }
   for (int i = 0; i < iorequest->events.size(); i++) {
     Event *e = iorequest->events[i].get();
     if (auto syncevent = dynamic_cast<SyncEvent *>(e)) {
@@ -162,7 +175,8 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
         event->type = SyncEvent::ENTER;
         auto io_request = std::make_shared<IORequest>(
             e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
-            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes,std::string(e->comm));
+            e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes,
+            std::string(e->comm));
         AddRequest(io_request);
         io_request->AddEvent(std::move(event));
       } else if (e->event_type == vfs_read_exit ||
@@ -170,6 +184,8 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
         processVfsEntry(e, event);
       }
     }
+  } else if (data_size == sizeof(struct abs_path)) {
+    done_request_handler->addInfo(data, data_size);
   } else {
     printf("unknown data struct\n");
     assert(false);

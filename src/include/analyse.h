@@ -55,6 +55,7 @@ public:
   explicit DoneRequestHandler(TraceConfig &&config)
       : config(std::move(config)) {}
   virtual void HandleDoneRequest(std::shared_ptr<Request>) = 0;
+  virtual void addInfo(void* data, size_t data_size) = 0;
   //
   TraceConfig config;
 };
@@ -70,7 +71,6 @@ public:
     done_request_handler->HandleDoneRequest(req);
   }
 
-private:
   void SetDoneRequestHandler(std::unique_ptr<DoneRequestHandler> handler) {
     done_request_handler = std::move(handler);
   }
