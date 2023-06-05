@@ -1,8 +1,8 @@
 # 线程数=4 每隔4s输出一次结果 测试时间=60s
 # 文件数=2 文件总大小=4G 文件操作模式=随机读写
 # 块大小 16384
-sysbench --threads=4 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw prepare
+sysbench --threads=8 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw prepare
 
-sysbench --threads=4 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw run
+sysbench --threads=8 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw run
 
-sysbench --threads=4 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw cleanup
+sysbench --threads=8 --report-interval=4 --time=60 --test=fileio --file-num=1 --file-total-size=1G --file-test-mode=rndrw cleanup

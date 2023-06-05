@@ -70,17 +70,17 @@ static inline int common_filter(pid_t tid, pid_t tgid, dev_t dev, ino_t inode,
     }
   }
 
-  if (target_direrctory_inode != 0) {
-    if (dir_inode != target_direrctory_inode) {
-      return 1;
-    }
-  }
+  // if (target_direrctory_inode != 0) {
+  //   if (dir_inode != target_direrctory_inode) {
+  //     return 1;
+  //   }
+  // }
 
-  if (target_file_inode != 0) {
-    if (inode != target_file_inode) {
-      return 1;
-    }
-  }
+  // if (target_file_inode != 0) {
+  //   if (inode != target_file_inode) {
+  //     return 1;
+  //   }
+  // }
 
   return 0;
 }
@@ -194,11 +194,11 @@ int BPF_PROG(enter_vfs_read) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
   dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  if (common_filter(tid, tgid, dev, i_ino, 0)) {
     return 0;
   }
 
@@ -208,20 +208,20 @@ int BPF_PROG(enter_vfs_read) {
   }
   // struct task_struct *task = (struct task_struct *)bpf_get_current_task();
   bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
-  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
-      goto go_on;
-    }
-  }
-go_on:;
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
+//   if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+//     if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
+//       goto go_on;
+//     }
+//   }
+// go_on:;
   set_common_info(task_info, tgid, tid, vfs_read_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, dev, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -242,22 +242,22 @@ int BPF_PROG(exit_vfs_read) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
   dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  if (common_filter(tid, tgid, dev, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, vfs_read_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
@@ -266,7 +266,7 @@ int BPF_PROG(exit_vfs_read) {
       offset -= ret;
     }
   }
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, dev, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -279,26 +279,26 @@ int BPF_PROG(enter_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino,0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -311,11 +311,11 @@ int BPF_PROG(exit_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino,0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
@@ -330,7 +330,7 @@ int BPF_PROG(exit_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   set_common_info(task_info, tgid, tid, filemap_get_pages_exit, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino,0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -342,22 +342,22 @@ int BPF_PROG(trace_mark_page_accessed,struct page *page){
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(page, mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, 0)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, mark_page_accessed, vfs_layer);
   loff_t alloffset = (BPF_CORE_READ(page,index) <<12);
-  set_fs_info(task_info, i_ino, 0, dev, alloffset,4096);
+  set_fs_info(task_info, i_ino, 0, 0, alloffset,4096);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
  }
@@ -369,21 +369,21 @@ int BPF_PROG(trace_enter_filemap_write_and_wait_range,struct address_space *mapp
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, 0)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_write_and_wait_range_enter, vfs_layer);
-  set_fs_info(task_info, i_ino, 0, dev, start_byte,end_byte+1-start_byte);
+  set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -397,21 +397,21 @@ int BPF_PROG(trace_exit_filemap_write_and_wait_range,struct address_space *mappi
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, 0)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_write_and_wait_range_exit, vfs_layer);
-  set_fs_info(task_info, i_ino, 0, dev, start_byte,end_byte+1-start_byte);
+  set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -424,21 +424,21 @@ int BPF_PROG(trace_enter_filemap_range_needs_writeback,struct address_space *map
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, 0)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_range_needs_writeback_enter, vfs_layer);
-  set_fs_info(task_info, i_ino, 0, dev, start_byte,end_byte+1-start_byte);
+  set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -452,21 +452,21 @@ int BPF_PROG(trace_exit_filemap_range_needs_writeback,struct address_space *mapp
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, 0)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_range_needs_writeback_exit, vfs_layer);
-  set_fs_info(task_info, i_ino, 0, dev, start_byte,end_byte+1-start_byte);
+  set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -478,26 +478,25 @@ int BPF_PROG(trace_enter_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter)
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path); ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -509,26 +508,26 @@ int BPF_PROG(trace_exit_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter){
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -594,11 +593,11 @@ int BPF_PROG(enter_vfs_write) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
 
@@ -606,21 +605,21 @@ int BPF_PROG(enter_vfs_write) {
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
-  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
-      goto go_on;
-    }
-  }
-go_on:;
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
+  // if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+    // if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
+    //   goto go_on;
+    // }
+  // }
+// go_on:;
   set_common_info(task_info, tgid, tid, vfs_write_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -639,11 +638,11 @@ int BPF_PROG(exit_vfs_write) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  struct path p = BPF_CORE_READ(file, f_path);
-  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  // struct path p = BPF_CORE_READ(file, f_path);
+  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
-  if (common_filter(tid, tgid, dev, i_ino, i_inop)) {
+  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
 
@@ -651,11 +650,11 @@ int BPF_PROG(exit_vfs_write) {
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  if (task_comm_filter(task_info->comm)) {
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
+  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  // if (task_comm_filter(task_info->comm)) {
+  //   bpf_ringbuf_discard(task_info, 0);
+  //   return 0;
+  // }
   set_common_info(task_info, tgid, tid, vfs_write_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
@@ -664,7 +663,7 @@ int BPF_PROG(exit_vfs_write) {
       offset -= ret;
     }
   }
-  set_fs_info(task_info, i_ino, i_inop, dev, offset, count);
+  set_fs_info(task_info, i_ino, 0, 0, offset, count);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -707,15 +706,6 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
   struct request *rq = (struct request *)(ctx->args[0]);
   int error = (int)(ctx->args[1]);
   unsigned int nr_bytes = (unsigned int)(ctx->args[2]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
   int bio_cnt = 0;
   struct bio *bio = BPF_CORE_READ(rq, bio);
   struct bvec_iter bi_iter;
@@ -735,8 +725,8 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         if (!task_info) {
           return 0;
         }
-        set_common_info(task_info, tid, tgid, block_rq_complete, bio_rq_association_info);
-        task_info->bio_rq_association_info.dev = dev;
+        set_common_info(task_info, 0, 0, block_rq_complete, bio_rq_association_info);
+        task_info->bio_rq_association_info.dev = 0;
         task_info->bio_rq_association_info.rq = (unsigned long long)rq;
         task_info->bio_rq_association_info.bio = (unsigned long long)bio;
         bpf_ringbuf_submit(task_info, 0);
@@ -754,22 +744,13 @@ int raw_tracepoint__block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
 SEC("raw_tp/block_rq_insert")
 int raw_tracepoint__block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
   struct request *rq = (struct request *)(ctx->args[0]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_rq_insert, rq_info);
-  set_rq_comm_info(task_info, rq, dev);
+  // bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, 0, 0, block_rq_insert, rq_info);
+  set_rq_comm_info(task_info, rq, 0);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -777,22 +758,13 @@ int raw_tracepoint__block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
 SEC("raw_tp/block_rq_issue")
 int raw_tracepoint__block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
   struct request *rq = (struct request *)(ctx->args[0]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_rq_issue, rq_info);
-  set_rq_comm_info(task_info, rq, dev);
+  // bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, 0, 0, block_rq_issue, rq_info);
+  set_rq_comm_info(task_info, rq,0);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -805,20 +777,17 @@ static inline void set_bio_rq_association_info(struct event* task_info, struct r
 
 SEC("kprobe/__rq_qos_track")
 int BPF_KPROBE(trace_rq_qos_track,struct rq_qos*q,struct request*rq,struct bio* bio){
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
+  // dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+  // if (common_filter(0, 0, dev, 0, 0)) {
+  //   return 1;
+  // }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, rq_qos_track, bio_rq_association_info);
-  set_bio_rq_association_info(task_info, rq, bio, dev);
+  // bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, 0, 0, rq_qos_track, bio_rq_association_info);
+  set_bio_rq_association_info(task_info, rq, bio, 0);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
@@ -826,67 +795,55 @@ int BPF_KPROBE(trace_rq_qos_track,struct rq_qos*q,struct request*rq,struct bio* 
 
 SEC("kprobe/__rq_qos_merge")
 int BPF_KPROBE(trace_rq_qos_merge,struct rq_qos*q,struct request*rq,struct bio* bio){
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
+  // dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+  // if (common_filter(0, 0, dev, 0, 0)) {
+  //   return 1;
+  // }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, rq_qos_merge, bio_rq_association_info);
-  set_bio_rq_association_info(task_info, rq, bio, dev);
+  set_common_info(task_info, 0, 0, rq_qos_merge, bio_rq_association_info);
+  set_bio_rq_association_info(task_info, rq, bio, 0);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
 
 SEC("kprobe/__rq_qos_done")
 int BPF_KPROBE(trace_rq_qos_done,struct rq_qos*q,struct request*rq){
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
   if (!task_info) {
     return 0;
   }
   bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, rq_qos_done , rq_info);
-  set_rq_comm_info(task_info, rq, dev);
+  set_common_info(task_info, 0, 0, rq_qos_done , rq_info);
+  set_rq_comm_info(task_info, rq, 0);
   bpf_ringbuf_submit(task_info, 0);
   return 0;
 }
 
-SEC("kprobe/__rq_qos_requeue")
-int BPF_KPROBE(trace_rq_qos_requeue,struct rq_qos*q,struct request*rq){
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
-  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-  if (!task_info) {
-    return 0;
-  }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, rq_qos_requeue , rq_info);
-  set_rq_comm_info(task_info, rq, dev);
-  bpf_ringbuf_submit(task_info, 0);
-  return 0;
-}
+// SEC("kprobe/__rq_qos_requeue")
+// int BPF_KPROBE(trace_rq_qos_requeue,struct rq_qos*q,struct request*rq){
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   struct gendisk *disk = BPF_CORE_READ(rq, rq_disk);
+//   dev_t dev =
+//       BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
+//   if (common_filter(tid, tgid, dev, 0, 0)) {
+//     return 1;
+//   }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+//   if (!task_info) {
+//     return 0;
+//   }
+//   bpf_get_current_comm(&task_info->comm, 80);
+//   set_common_info(task_info, tid, tgid, rq_qos_requeue , rq_info);
+//   set_rq_comm_info(task_info, rq, dev);
+//   bpf_ringbuf_submit(task_info, 0);
+//   return 0;
+// }
 
 
 
@@ -896,18 +853,18 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
   u64 id = bpf_get_current_pid_tgid();
   pid_t tgid = id >> 32;
   pid_t tid = id & 0xffffffff;
-  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
+  // dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+  if (common_filter(tid, tgid, 0, 0, 0)) {
     return 1;
   }
   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
   0); if (!task_info) {
     return 0;
   }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_bio_queue,bio_info);
+  // bpf_get_current_comm(&task_info->comm, 80);
+  set_common_info(task_info, 0, 0, block_bio_queue,bio_info);
   task_info->bio_info.bio = (unsigned long long)bio;
-  task_info->bio_info.dev = dev;
+  task_info->bio_info.dev = 0;
   task_info->bio_info.bio_info_type = queue_first_bio;
   task_info->bio_info.bio_op = BPF_CORE_READ(bio, bi_opf);
   unsigned int bvec_cnt = BPF_CORE_READ(bio, bi_vcnt);
@@ -933,95 +890,95 @@ int raw_tracepoint__block_bio_queue(struct bpf_raw_tracepoint_args *ctx) {
   return 0;
 }
 
-SEC("raw_tp/block_plug") //TODO:
-int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
-  struct request_queue *q = (struct request_queue *)(ctx->args[0]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(q, disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
-  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-  0); 
-  if (!task_info) {
-    return 0;
-  }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_plug, rq_plug_info);
-  task_info->rq_plug_info.dev = dev;
-  task_info->rq_plug_info.plug_or_unplug = 1;
-  task_info->rq_plug_info.request_queue = (unsigned long long)q;
-  bpf_ringbuf_submit(task_info, 0);
-  return 0;
-}
+// SEC("raw_tp/block_plug") //TODO:
+// int raw_tracepoint__block_plug(struct bpf_raw_tracepoint_args *ctx) {
+//   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   struct gendisk *disk = BPF_CORE_READ(q, disk);
+//   dev_t dev =
+//       BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
+//   if (common_filter(tid, tgid, dev, 0, 0)) {
+//     return 1;
+//   }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
+//   0); 
+//   if (!task_info) {
+//     return 0;
+//   }
+//   bpf_get_current_comm(&task_info->comm, 80);
+//   set_common_info(task_info, tid, tgid, block_plug, rq_plug_info);
+//   task_info->rq_plug_info.dev = dev;
+//   task_info->rq_plug_info.plug_or_unplug = 1;
+//   task_info->rq_plug_info.request_queue = (unsigned long long)q;
+//   bpf_ringbuf_submit(task_info, 0);
+//   return 0;
+// }
 
-SEC("raw_tp/block_unplug") 
-int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
-  struct request_queue *q = (struct request_queue *)(ctx->args[0]);
-  unsigned int depth = (unsigned int)(ctx->args[1]);
-  bool explicit = (bool)(ctx->args[2]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  struct gendisk *disk = BPF_CORE_READ(q, disk);
-  dev_t dev =
-      BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
-  if (common_filter(tid, tgid, dev, 0, 0)) {
-    return 1;
-  }
-  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
-  0); if (!task_info) {
-    return 0;
-  }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_unplug, rq_plug_info);
-  task_info->rq_plug_info.dev = dev;
-  task_info->rq_plug_info.plug_or_unplug = 0;
-  task_info->rq_plug_info.request_queue = (unsigned long long)q;
-  bpf_ringbuf_submit(task_info, 0);
-  return 0;
-}
+// SEC("raw_tp/block_unplug") 
+// int raw_tracepoint__block_unplug(struct bpf_raw_tracepoint_args *ctx) {
+//   struct request_queue *q = (struct request_queue *)(ctx->args[0]);
+//   unsigned int depth = (unsigned int)(ctx->args[1]);
+//   bool explicit = (bool)(ctx->args[2]);
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   struct gendisk *disk = BPF_CORE_READ(q, disk);
+//   dev_t dev =
+//       BPF_CORE_READ(disk, major) << 20 | BPF_CORE_READ(disk, first_minor);
+//   if (common_filter(tid, tgid, dev, 0, 0)) {
+//     return 1;
+//   }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
+//   0); if (!task_info) {
+//     return 0;
+//   }
+//   bpf_get_current_comm(&task_info->comm, 80);
+//   set_common_info(task_info, tid, tgid, block_unplug, rq_plug_info);
+//   task_info->rq_plug_info.dev = dev;
+//   task_info->rq_plug_info.plug_or_unplug = 0;
+//   task_info->rq_plug_info.request_queue = (unsigned long long)q;
+//   bpf_ringbuf_submit(task_info, 0);
+//   return 0;
+// }
 
 // TP_PROTO(struct bio *bio, unsigned int new_sector),
 
-SEC("raw_tp/block_split") // TODO:
-int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
-  struct bio *bio = (struct bio *)(ctx->args[0]);
-  // unsigned int new_sector = (unsigned int)(ctx->args[1]);
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
-  // if (common_filter(tid, tgid, dev, 0, 0)) {
-  //   return 1;
-  // }
-  struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
-  if (!task_info) {
-    return 0;
-  }
-  bpf_get_current_comm(&task_info->comm, 80);
-  set_common_info(task_info, tid, tgid, block_split, bio_info);
-  task_info->bio_info.bio = (unsigned long long)bio;
-  task_info->bio_info.dev = dev;
-  task_info->bio_info.bio_info_type = split_bio;
-  task_info->bio_info.bio_op = BPF_CORE_READ(bio, bi_opf);
-  struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
-  task_info->bio_info.bvec_idx_start = bi_iter.bi_idx;
-  struct bio *parent_bio = BPF_CORE_READ(bio, bi_private);
-  if(parent_bio == NULL){
-    bpf_ringbuf_discard(task_info, 0);
-    return 0;
-  }
-  task_info->bio_info.parent_bio = (unsigned long long)parent_bio;
-  bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
-  task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
-  bpf_ringbuf_submit(task_info, 0);
-  return 0;
-}
+// SEC("raw_tp/block_split") // TODO:
+// int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
+//   struct bio *bio = (struct bio *)(ctx->args[0]);
+//   // unsigned int new_sector = (unsigned int)(ctx->args[1]);
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+//   // if (common_filter(tid, tgid, dev, 0, 0)) {
+//   //   return 1;
+//   // }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+//   if (!task_info) {
+//     return 0;
+//   }
+//   bpf_get_current_comm(&task_info->comm, 80);
+//   set_common_info(task_info, tid, tgid, block_split, bio_info);
+//   task_info->bio_info.bio = (unsigned long long)bio;
+//   task_info->bio_info.dev = dev;
+//   task_info->bio_info.bio_info_type = split_bio;
+//   task_info->bio_info.bio_op = BPF_CORE_READ(bio, bi_opf);
+//   struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
+//   task_info->bio_info.bvec_idx_start = bi_iter.bi_idx;
+//   struct bio *parent_bio = BPF_CORE_READ(bio, bi_private);
+//   if(parent_bio == NULL){
+//     bpf_ringbuf_discard(task_info, 0);
+//     return 0;
+//   }
+//   task_info->bio_info.parent_bio = (unsigned long long)parent_bio;
+//   bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
+//   task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
+//   bpf_ringbuf_submit(task_info, 0);
+//   return 0;
+// }
 
 
 // TP_PROTO(struct bio *bio, dev_t dev, sector_t from),

@@ -45,19 +45,23 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
     return;
   }
   int tapnum = 0;
-  if (inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()) {
+//   if (inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()) {
+//     fprintf(outputFile,
+//             "task %s  request %lld total time %lf \ttarget file inode %lld "
+//             "path %s\n",
+//             iorequest->comm.c_str(), iorequest->id, duration_ms,
+//             iorequest->inode, "unknown");
+//   } else {
+//     fprintf(outputFile,
+//             "task %s  request %lld total time %lf \ttarget file inode %lld "
+//             "path %s\n",
+//             iorequest->comm.c_str(), iorequest->id, duration_ms,
+//             iorequest->inode, inode_abs_path_map[iorequest->inode].c_str());
+//   }
     fprintf(outputFile,
-            "task %s  request %lld total time %lf \ttarget file inode %lld "
-            "path %s\n",
+            "task %s  request %lld total time %lf \ttarget file inode %lld \n",
             iorequest->comm.c_str(), iorequest->id, duration_ms,
-            iorequest->inode, "unknown");
-  } else {
-    fprintf(outputFile,
-            "task %s  request %lld total time %lf \ttarget file inode %lld "
-            "path %s\n",
-            iorequest->comm.c_str(), iorequest->id, duration_ms,
-            iorequest->inode, inode_abs_path_map[iorequest->inode].c_str());
-  }
+            iorequest->inode);
 
   std::string tapstr = "";
   statistic_mutex.lock();

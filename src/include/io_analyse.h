@@ -299,7 +299,10 @@ public:
           (bvec_info->bvecs[i].index << 12) + bvec_info->bvecs[i].bv_offset;
       auto len = bvec_info->bvecs[i].bv_len;
       bio_object->addAssociation(inode, offset, len);
+      // printf("bio %lld bvec %d inode %lld offset %lld len %lld bvec cnt %d\n", bio,i ,inode,
+      //        offset, len,bvec_info->bvec_cnt);
     }
+    
     // add bio to relative request
     for (auto &io_request : pending_requests) {
       io_request->AddBioObjectAndBuildMapping(bio_object, io_request);
