@@ -42,7 +42,7 @@ add_custom_command(
     DEPENDS iotrace_bpf    iotrace_bpf_program 
 )
 # Add iotrace_bpf to the iotracer executable
-target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z)
+target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
 add_custom_target(iotrace_skel DEPENDS ${CMAKE_SOURCE_DIR}/include/iotrace.skel.h)
 
 # Download and build libbpf

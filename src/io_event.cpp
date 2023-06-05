@@ -17,8 +17,14 @@ bool IORequest::isPendingAsync() {
   return false;
 }
 
-bool IORequest::isRelative(unsigned long long inode, unsigned long long offset,
+bool IORequest::isRelative(int pid,int tid,unsigned long long inode, unsigned long long offset,
                            unsigned long nr_bytes) {
+  if(this->pid != pid || this->tid != tid){
+    return false;
+  }
+  if(nr_bytes == 0){
+    return true;
+  }
   if (this->inode != inode) {
     return false;
   }
@@ -71,25 +77,25 @@ bool IORequest::AddBioObjectAndBuildMapping(std::shared_ptr<BioObject> bio,
 }
 
 // void print() override {}
-void BlockPendingDuration::printfmtNtap(FILE *file, int tapnum) {
+void BlockPendingDuration::printfmtNtap(FILE *file, int tapnum,unsigned long long start) {
   for (int i = 0; i < relative_bio.size(); i++) {
     unsigned long long time = 0;
     auto bio = relative_bio[i];
     if(!bio->isDone){
       continue;
     }
-    fprintf(file, "bio %d", i);
     for (int j = 0; j < bio->relative_events.size(); j++) {
       auto event = bio->relative_events[j];
       for (int k = 0; k < tapnum; k++) {
         fprintf(file, "\t");
       }
       if (j == 0) {
-        fprintf(file, " %s start %s", kernel_hook_type_str[event->event_type],bio->bio_op_str.c_str());
+        fprintf(file, " %s start bio op :%s %f ms", kernel_hook_type_str[event->event_type],bio->bio_op_str.c_str(),
+                (event->timestamp - start) / 1000000.0);
       } else {
-        fprintf(file, " %s time since last event %f ms",
+        fprintf(file, " %s time since start %f ms",
                 kernel_hook_type_str[event->event_type],
-                (event->timestamp - time) / 1000000.0);
+                (event->timestamp - start) / 1000000.0);
       }
       time = event->timestamp;
       fprintf(file, "\n");

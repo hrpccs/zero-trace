@@ -1,8 +1,8 @@
 #pragma once
 
-#include "bpf/bpf.h"
 #include "analyse.h"
 #include "basic_event.h"
+#include "bpf/bpf.h"
 #include "cstdio"
 #include "event_defs.h"
 #include "hook_point.h"
@@ -10,11 +10,14 @@
 #include "iotrace.skel.h"
 #include "vector"
 #include <bpf/libbpf.h>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <stddef.h>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -32,6 +35,43 @@ public:
     } else {
       outputFile = stdout;
     }
+
+    event_pair_map.clear();
+    event_pair_map[iomap_dio_rw_enter] = iomap_dio_rw_exit;
+    event_pair_map[__cond_resched_enter] = __cond_resched_exit;
+    event_pair_map[vfs_read_enter] = vfs_read_exit;
+    event_pair_map[vfs_write_enter] = vfs_write_exit;
+    event_pair_map[filemap_get_pages_enter] = filemap_get_pages_exit;
+    event_pair_map[filemap_range_needs_writeback_enter] =
+        filemap_range_needs_writeback_exit;
+    event_pair_map[filemap_write_and_wait_range_enter] =
+        filemap_write_and_wait_range_exit;
+    // event_pair_map[block_plug] = block_unplug;
+    event_pair_map[block_bio_queue] = block_rq_issue;   // q2d
+    event_pair_map[block_rq_issue] = block_rq_complete; // d2c
+
+    // Create a thread to periodically call getAvgStatisticAndReset
+    std::thread statistic_thread([this]() {
+      while (true) {
+        std::this_thread::sleep_for(
+            std::chrono::seconds(this->config.timer_trigger_duration));
+        getAvgStatisticAndReset();
+        time_t now = time(nullptr);
+        struct tm *tm_now = localtime(&now);
+        char time_str[9];
+        strftime(time_str, sizeof(time_str), "%T", tm_now);
+        fprintf(stdout,
+                "time/ms  "
+                "%s      %s      %s      %s      %s      %s      %s\n",
+                "    read", "       write", "     get_page", "read_offcpu", "write_offcpu",
+                "     q2d    ", "     d2c    ");
+        fprintf(stdout, "%s  %11f      %11f      %11f      %11f      %11f      %11f      %11f\n", time_str,
+                avg_read_request_time, avg_write_request_time,
+                avg_get_page_time, avg_read_offcpu_time, avg_write_offcpu_time,
+                avg_q2d_time, avg_d2c_time);
+      }
+    });
+    statistic_thread.detach();
   }
 
   ~IOEndHandler() {
@@ -40,12 +80,13 @@ public:
     }
   }
 
-  void readAbsPath(unsigned long long inode, std::string &path,struct abs_path &abs_path) {
+  void readAbsPath(unsigned long long inode, std::string &path,
+                   struct abs_path &abs_path) {
     // get abs path from bpf map
     struct iotrace_bpf *skel = config.skel;
     path = "";
     for (int level = 0; level < MAX_LEVEL; level++) {
-      if (abs_path.name[level][0] == '\0' ) {
+      if (abs_path.name[level][0] == '\0') {
         continue;
       }
       // if(abs_path.name[level][0] == '/') {
@@ -54,7 +95,7 @@ public:
       // }else{
       // path += "/";
       // }
-      if(abs_path.has_root){
+      if (abs_path.has_root) {
         path += "/";
         path += abs_path.name[level];
       }
@@ -62,10 +103,108 @@ public:
     // printf("abs path for inode %lld is %s\n", inode, path.c_str());
   }
 
-  void addInfo(void* data, size_t data_size) override;
+  void updateStatistic(enum kernel_hook_type curr_event,
+                       unsigned long long curr_ts, unsigned long long prev_ts,
+                       IORequest::requestType type) {
+    // update statistic
+    switch (curr_event) {
+    // case iomap_dio_rw_exit:   // dio time
+    case vfs_read_exit: // sync read request time
+      read_request_time_sum += curr_ts - prev_ts;
+      read_request_count++;
+      break;
+    case vfs_write_exit: // sync write request time
+      write_request_time_sum += curr_ts - prev_ts;
+      write_request_count++;
+      break;
+    case filemap_get_pages_exit: // get page time
+      get_page_time_sum += curr_ts - prev_ts;
+      get_page_count++;
+      break;
+    case __cond_resched_exit: // offcpu time
+      if (type == IORequest::requestType::READ) {
+        read_offcpu_time_sum += curr_ts - prev_ts;
+        read_offcpu_count = read_request_count;
+      } else if (type == IORequest::requestType::WRITE) {
+        write_offcpu_time_sum += curr_ts - prev_ts;
+        write_offcpu_count = write_request_count;
+      }
+      break;
+    case block_rq_issue: // q2d
+      q2d_time_sum += curr_ts - prev_ts;
+      q2d_count++;
+      break;
+    case block_rq_complete: // d2c
+      d2c_time_sum += curr_ts - prev_ts;
+      d2c_count++;
+      break;
+    default:
+      break;
+    }
+  }
+
+  void getAvgStatisticAndReset() {
+    statistic_mutex.lock();
+    avg_read_request_time =
+        (double)read_request_time_sum / read_request_count / 1000000.0;
+    avg_write_request_time =
+        (double)write_request_time_sum / write_request_count / 1000000.0;
+    avg_get_page_time = (double)get_page_time_sum / get_page_count / 1000000.0;
+    avg_read_offcpu_time =
+        (double)read_offcpu_time_sum / read_offcpu_count / 1000000.0;
+    avg_write_offcpu_time =
+        (double)write_offcpu_time_sum / write_offcpu_count / 1000000.0;
+    avg_q2d_time = (double)q2d_time_sum / q2d_count / 1000000.0;
+    avg_d2c_time = (double)d2c_time_sum / d2c_count / 1000000.0;
+    read_request_time_sum = 0;
+    read_request_count = 0;
+    write_request_time_sum = 0;
+    write_request_count = 0;
+    get_page_time_sum = 0;
+    get_page_count = 0;
+    read_offcpu_time_sum = 0;
+    read_offcpu_count = 0;
+    write_offcpu_count = 0;
+    write_offcpu_time_sum = 0;
+    q2d_time_sum = 0;
+    q2d_count = 0;
+    d2c_time_sum = 0;
+    d2c_count = 0;
+    statistic_mutex.unlock();
+  }
+
+  void addInfo(void *data, size_t data_size) override;
   void HandleDoneRequest(std::shared_ptr<Request>) override;
   FILE *outputFile;
   std::map<unsigned long long, std::string> inode_abs_path_map;
+  // record of pair event (with enter and exit)
+  std::map<enum kernel_hook_type, enum kernel_hook_type> event_pair_map;
+  std::map<enum kernel_hook_type, unsigned long long>
+      event_pair_occur_map; // for
+
+  // statistic
+  std::mutex statistic_mutex;
+  unsigned long long read_request_time_sum;
+  unsigned long long read_request_count;
+  unsigned long long write_request_time_sum;
+  unsigned long long write_request_count;
+  unsigned long long get_page_time_sum;
+  unsigned long long get_page_count;
+  unsigned long long read_offcpu_time_sum;
+  unsigned long long read_offcpu_count;
+  unsigned long long write_offcpu_time_sum;
+  unsigned long long write_offcpu_count;
+  unsigned long long q2d_time_sum;
+  unsigned long long q2d_count;
+  unsigned long long d2c_time_sum;
+  unsigned long long d2c_count;
+  double avg_read_request_time;
+  double avg_write_request_time;
+  double avg_get_page_time;
+  double avg_read_offcpu_time;
+  double avg_write_offcpu_time;
+  double avg_q2d_time;
+  double avg_d2c_time;
 };
 
 class IOAnalyser : public Analyser {
@@ -73,7 +212,7 @@ public:
   IOAnalyser(std::unique_ptr<DoneRequestHandler> handler)
       : Analyser(std::move(handler)) {}
   ~IOAnalyser() {}
-  void processVfsEntry(struct event *&e, std::unique_ptr<SyncEvent> &event);
+  void processVfsExit(struct event *&e, std::unique_ptr<SyncEvent> &event);
   void AddTrace(void *data, size_t data_size) override;
   void AddRequest(std::shared_ptr<IORequest> request) {
     pending_requests.push_back(std::move(request));

@@ -91,11 +91,12 @@ void parse_args(int argc, char **argv) {
   std::string command;
 
   double time_threshold = 1.0;
+  int time_duration = 1;
 
   printf("Parsing arguments\n");
   output_file = stdout;
 
-  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w:n:h")) != -1) {
+  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w:n:T:h")) != -1) {
     switch (opt) {
     case 'p':
       pid = atoi(optarg);
@@ -131,10 +132,13 @@ void parse_args(int argc, char **argv) {
       std::strcpy(skel->bss->command, command.c_str());
       skel->bss->command_len = command.length();
       break;
+    case 'T':
+      time_duration = atoi(optarg);
+      break;
     default:
       fprintf(stderr,
               "Usage: %s [-p pid] [-t tgid] [-d dev] [-c cgroup] [-f file] [-D "
-              "directory] [-o output] [-t time threshold] [-n command to trace]\n",
+              "directory] [-o output] [-w time threshold] [-n command to trace] [-T time duration /s]\n",
               argv[0]);
       exit(EXIT_FAILURE);
     }
@@ -151,7 +155,7 @@ void parse_args(int argc, char **argv) {
 
   TraceConfig config =
       TraceConfig(pid, tid, std::move(dev_path), file, directory,
-                  time_threshold, std::move(output_path), std::move(command),skel);
+                  time_threshold, std::move(output_path), std::move(command),skel,time_duration);
 
   // Do something with the parsed arguments
   // #ifdef CONFIG_BLK_CGROUP

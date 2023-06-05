@@ -25,7 +25,7 @@ public:
     isIssued = false;
   }
   ~BioObject() {  }
-  void print() { printf("BioObject\n"); }
+  void print() override { printf("BioObject\n"); }
   struct Association { // use to find
     Association(unsigned long long inode, unsigned long offset,
                 unsigned long nr_bytes)
@@ -93,21 +93,39 @@ public:
 
 class BlockPendingDuration : public AsyncDuration {
 public:
-  void printfmtNtap(FILE *file, int tapnum);
+  void printfmtNtap(FILE *file, int tapnum,unsigned long long );
   // std::vector<std::shared_ptr<AsyncObject>> async_objects;
   std::vector<std::shared_ptr<BioObject>> relative_bio;
 };
 
 class IORequest : public Request {
 public:
+  enum requestType {
+    READ,
+    WRITE,
+    FLUSH,
+    DISCARD,
+    SECURE_ERASE,
+    WRITE_SAME,
+    WRITE_ZEROES,
+    ZONE_OPEN,
+    ZONE_CLOSE,
+    ZONE_FINISH,
+    ZONE_APPEND,
+    ZONE_RESET,
+    ZONE_RESET_ALL,
+    DRV_IN,
+    DRV_OUT,
+    LAST
+  };
   IORequest(unsigned long pid, unsigned long tid, unsigned long long inode,
             unsigned long long dev, unsigned long offset,
-            unsigned long nr_bytes, std::string comm)
+            unsigned long nr_bytes, std::string comm, enum requestType type)
       : pid(pid), tid(tid), inode(inode), dev(dev), offset(offset),
-        nr_bytes(nr_bytes) ,comm(comm){}
+        nr_bytes(nr_bytes) ,comm(comm),type(type){}
   bool isPendingAsync();
 
-  bool isRelative(unsigned long long inode, unsigned long long offset,
+  bool isRelative(int pid,int tid,unsigned long long inode, unsigned long long offset,
                   unsigned long nr_bytes);
 
   bool isEqual(unsigned long long inode, unsigned long long offset,
@@ -125,5 +143,6 @@ public:
   unsigned long long dev;      // target device
   unsigned long long offset;   // RW offset
   unsigned long long nr_bytes; // RW size
+  enum requestType type;
   std::string comm;
 };

@@ -2,6 +2,7 @@
 
 #include "basic_event.h"
 #include "event_defs.h"
+#include "hook_point.h"
 #include "io_event.h"
 #include <filesystem>
 #include <memory>
@@ -18,11 +19,12 @@ struct TraceConfig {
   TraceConfig(unsigned long pid, unsigned long tid, std::filesystem::path dev,
               unsigned long ino, unsigned long long dir_ino,
               double time_threshold, std::filesystem::path output_path,
-              std::string command, struct iotrace_bpf *skel)
+              std::string command, struct iotrace_bpf *skel,
+              int timer_trigger_duration)
       : pid(pid), tid(tid), dev(std::move(dev)), ino(ino), dir_ino(dir_ino),
         time_threshold(time_threshold), output_path(std::move(output_path)),
-        command(std::move(command)), skel(skel) {}
-
+        command(std::move(command)), skel(skel),
+        timer_trigger_duration(timer_trigger_duration) {}
   // ebpf skel
   struct iotrace_bpf *skel;
   // trace target
@@ -34,7 +36,9 @@ struct TraceConfig {
   std::string command;
 
   // trigger threshold
-  double time_threshold;
+  double time_threshold; // ms
+  // timer trigger duration
+  int timer_trigger_duration; // s
   // trace result output
   std::filesystem::path output_path;
 
@@ -54,8 +58,9 @@ class DoneRequestHandler {
 public:
   explicit DoneRequestHandler(TraceConfig &&config)
       : config(std::move(config)) {}
+  virtual ~DoneRequestHandler() {}
   virtual void HandleDoneRequest(std::shared_ptr<Request>) = 0;
-  virtual void addInfo(void* data, size_t data_size) = 0;
+  virtual void addInfo(void *data, size_t data_size) = 0;
   //
   TraceConfig config;
 };
@@ -65,7 +70,7 @@ public:
   Analyser(std::unique_ptr<DoneRequestHandler> handler) {
     this->SetDoneRequestHandler(std::move(handler));
   }
-  ~Analyser() {}
+  virtual ~Analyser() {}
   virtual void AddTrace(void *data, size_t data_size) = 0;
   void DoneRequest(std::shared_ptr<Request> req) {
     done_request_handler->HandleDoneRequest(req);
