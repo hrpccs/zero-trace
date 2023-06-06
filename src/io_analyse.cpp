@@ -21,6 +21,54 @@ void IOEndHandler::addInfo(void *data, size_t data_size) {
   }
 }
 
+void IOEndHandler::HandleDontPrintRequest(std::shared_ptr<Request> request) {
+  auto iorequest = std::dynamic_pointer_cast<IORequest>(request);
+  statistic_mutex.lock();
+  for (int i = 0; i < iorequest->events.size(); i++) {
+    Event *e = iorequest->events[i].get();
+    if (auto syncevent = dynamic_cast<SyncEvent *>(e)) {
+      auto enterIter = event_pair_map.find(syncevent->event_type);
+      if (enterIter != event_pair_map.end()) {
+        event_pair_occur_map[enterIter->second] =
+            syncevent->timestamp; // store enter's timestamp to exit event
+      } else {
+        // printf("exit event1: %s\n",
+        // kernel_hook_type_str[syncevent->event_type]);
+        auto exitIter = event_pair_occur_map.find(syncevent->event_type);
+        if (exitIter != event_pair_occur_map.end()) {
+          updateStatistic(syncevent->event_type, syncevent->timestamp,
+                          exitIter->second, iorequest->type);
+          event_pair_occur_map.erase(exitIter);
+        }
+      }
+    } else if (auto asyncevent = dynamic_cast<BlockPendingDuration *>(e)) {
+      for (auto &bio : asyncevent->relative_bio) {
+        // assert(false);
+        for (auto &syncevent : bio->relative_events) { // FIXME: refactor
+        printf("type:%s",kernel_hook_type_str[syncevent->event_type]);
+          // is the end of some duration?
+          bool isExitToo = false;
+          auto enterIter = event_pair_map.find(syncevent->event_type);
+          auto exitIter = event_pair_occur_map.find(syncevent->event_type);
+          if (exitIter != event_pair_occur_map.end()) {
+            isExitToo = true;
+            updateStatistic(syncevent->event_type, syncevent->timestamp,
+                            exitIter->second, iorequest->type);
+            event_pair_occur_map.erase(exitIter);
+          }
+
+          if (enterIter != event_pair_map.end()) {
+            event_pair_occur_map[enterIter->second] =
+                syncevent->timestamp; // store enter's timestamp
+          }
+        }
+      }
+    }
+  }
+  statistic_mutex.unlock();
+  request.reset();
+}
+
 void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   IORequest *iorequest = dynamic_cast<IORequest *>(request.get());
   unsigned long long start, end;
@@ -41,9 +89,10 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   unsigned long long duration = end - start;
   double duration_ms = timestamp2ms(duration);
 
-  if (duration_ms < config.time_threshold) {
+  // if (duration_ms < config.time_threshold) {
+    HandleDontPrintRequest(request);
     return;
-  }
+  // }
   int tapnum = 0;
 //   if (inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()) {
 //     fprintf(outputFile,
@@ -104,7 +153,7 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
                     kernel_hook_type_str[syncevent->event_type]);
             tapstr.pop_back();
             updateStatistic(syncevent->event_type, syncevent->timestamp,
-                            exitIter->second,iorequest->type);
+                            exitIter->second, iorequest->type);
             event_pair_occur_map.erase(exitIter);
           } else {
             goto normal_print;
@@ -138,7 +187,7 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
             }
             tapstr.pop_back();
             updateStatistic(syncevent->event_type, syncevent->timestamp,
-                            exitIter->second,iorequest->type);
+                            exitIter->second, iorequest->type);
             event_pair_occur_map.erase(exitIter);
           }
           // first print the time stamp since start
@@ -264,7 +313,7 @@ void IOAnalyser::AddTrace(void *data, size_t data_size) {
         auto io_request = std::make_shared<IORequest>(
             e->pid, e->tid, e->vfs_layer_info.inode, e->vfs_layer_info.dev,
             e->vfs_layer_info.file_offset, e->vfs_layer_info.file_bytes,
-            std::string(e->comm),type);
+            std::string(e->comm), type);
         AddRequest(io_request);
         io_request->AddEvent(std::move(event));
       } else if (e->event_type == vfs_read_exit ||

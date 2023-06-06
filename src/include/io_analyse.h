@@ -62,13 +62,14 @@ public:
         strftime(time_str, sizeof(time_str), "%T", tm_now);
         fprintf(stdout,
                 "time/ms  "
-                "%s      %s      %s      %s      %s      %s      %s\n",
-                "    read", "       write", "     get_page", "read_offcpu", "write_offcpu",
-                "     q2d    ", "     d2c    ");
-        fprintf(stdout, "%s  %11f      %11f      %11f      %11f      %11f      %11f      %11f\n", time_str,
-                avg_read_request_time, avg_write_request_time,
-                avg_get_page_time, avg_read_offcpu_time, avg_write_offcpu_time,
-                avg_q2d_time, avg_d2c_time);
+                "%s      %s      %s      %s      %s\n",
+                "    read", "       write", "     get_page", "read_offcpu",
+                "write_offcpu");
+        fprintf(stdout,
+                "%s  %11f      %11f      %11f      %11f      %11f      "
+                " \n",
+                time_str, avg_read_request_time, avg_write_request_time,
+                avg_get_page_time, avg_read_offcpu_time, avg_write_offcpu_time);
       }
     });
     statistic_thread.detach();
@@ -175,37 +176,38 @@ public:
 
   void addInfo(void *data, size_t data_size) override;
   void HandleDoneRequest(std::shared_ptr<Request>) override;
-  FILE *outputFile;
-  std::map<unsigned long long, std::string> inode_abs_path_map;
-  // record of pair event (with enter and exit)
-  std::map<enum kernel_hook_type, enum kernel_hook_type> event_pair_map;
-  std::map<enum kernel_hook_type, unsigned long long>
-      event_pair_occur_map; // for
+  void HandleDontPrintRequest(std::shared_ptr<Request> request);
+FILE *outputFile;
+std::map<unsigned long long, std::string> inode_abs_path_map;
+// record of pair event (with enter and exit)
+std::map<enum kernel_hook_type, enum kernel_hook_type> event_pair_map;
+std::map<enum kernel_hook_type, unsigned long long> event_pair_occur_map; // for
 
-  // statistic
-  std::mutex statistic_mutex;
-  unsigned long long read_request_time_sum;
-  unsigned long long read_request_count;
-  unsigned long long write_request_time_sum;
-  unsigned long long write_request_count;
-  unsigned long long get_page_time_sum;
-  unsigned long long get_page_count;
-  unsigned long long read_offcpu_time_sum;
-  unsigned long long read_offcpu_count;
-  unsigned long long write_offcpu_time_sum;
-  unsigned long long write_offcpu_count;
-  unsigned long long q2d_time_sum;
-  unsigned long long q2d_count;
-  unsigned long long d2c_time_sum;
-  unsigned long long d2c_count;
-  double avg_read_request_time;
-  double avg_write_request_time;
-  double avg_get_page_time;
-  double avg_read_offcpu_time;
-  double avg_write_offcpu_time;
-  double avg_q2d_time;
-  double avg_d2c_time;
-};
+// statistic
+std::mutex statistic_mutex;
+unsigned long long read_request_time_sum;
+unsigned long long read_request_count;
+unsigned long long write_request_time_sum;
+unsigned long long write_request_count;
+unsigned long long get_page_time_sum;
+unsigned long long get_page_count;
+unsigned long long read_offcpu_time_sum;
+unsigned long long read_offcpu_count;
+unsigned long long write_offcpu_time_sum;
+unsigned long long write_offcpu_count;
+unsigned long long q2d_time_sum;
+unsigned long long q2d_count;
+unsigned long long d2c_time_sum;
+unsigned long long d2c_count;
+double avg_read_request_time;
+double avg_write_request_time;
+double avg_get_page_time;
+double avg_read_offcpu_time;
+double avg_write_offcpu_time;
+double avg_q2d_time;
+double avg_d2c_time;
+}
+;
 
 class IOAnalyser : public Analyser {
 public:
