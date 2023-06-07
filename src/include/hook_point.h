@@ -35,9 +35,9 @@
   X(filemap_write_and_wait_range_exit)                                         \
   X(mark_page_accessed)                                                        \
   X(iomap_dio_rw_enter)                                                        \
-  X(iomap_dio_rw_exit) \
-  X(__cond_resched_enter) \
-  X(__cond_resched_exit) \
+  X(iomap_dio_rw_exit)                                                         \
+  X(__cond_resched_enter)                                                      \
+  X(__cond_resched_exit)
 
 #define KERNEL_HOOK_TYPE_ENUM(name) name,
 enum kernel_hook_type { KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_ENUM) };

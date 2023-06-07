@@ -45,7 +45,7 @@ void IOEndHandler::HandleDontPrintRequest(std::shared_ptr<Request> request) {
       for (auto &bio : asyncevent->relative_bio) {
         // assert(false);
         for (auto &syncevent : bio->relative_events) { // FIXME: refactor
-        printf("type:%s",kernel_hook_type_str[syncevent->event_type]);
+        // printf("type:%s",kernel_hook_type_str[syncevent->event_type]);
           // is the end of some duration?
           bool isExitToo = false;
           auto enterIter = event_pair_map.find(syncevent->event_type);
@@ -89,10 +89,10 @@ void IOEndHandler::HandleDoneRequest(std::shared_ptr<Request> request) {
   unsigned long long duration = end - start;
   double duration_ms = timestamp2ms(duration);
 
-  // if (duration_ms < config.time_threshold) {
+  if (duration_ms < config.time_threshold) {
     HandleDontPrintRequest(request);
     return;
-  // }
+  }
   int tapnum = 0;
 //   if (inode_abs_path_map.find(iorequest->inode) == inode_abs_path_map.end()) {
 //     fprintf(outputFile,

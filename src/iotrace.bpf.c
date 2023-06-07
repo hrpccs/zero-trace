@@ -34,6 +34,8 @@ struct {
 } tmp_abs_path SEC(".maps");
 
 
+// Force emitting struct event into the ELF.
+const struct event *unused __attribute__((unused));
 
 unsigned int target_tgid = 0;                   // pid
 unsigned int target_tid = 0;                    // tid
@@ -42,9 +44,6 @@ unsigned long long target_direrctory_inode = 0; // directory inode
 unsigned long target_dev = 0;                   // device
 char command[MAX_COMM_LEN] = {0};
 unsigned int command_len = 0;
-
-// Force emitting struct event into the ELF.
-const struct event *unused __attribute__((unused));
 
 // return 1, means will be filtered
 // return 0, means will be traced
@@ -194,8 +193,8 @@ int BPF_PROG(enter_vfs_read) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
   dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, dev, i_ino, 0)) {
@@ -208,16 +207,16 @@ int BPF_PROG(enter_vfs_read) {
   }
   // struct task_struct *task = (struct task_struct *)bpf_get_current_task();
   bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
-//   if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-//     if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
-//       goto go_on;
-//     }
-//   }
-// go_on:;
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
+  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
+      goto go_on;
+    }
+  }
+go_on:;
   set_common_info(task_info, tgid, tid, vfs_read_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -242,8 +241,8 @@ int BPF_PROG(exit_vfs_read) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
   dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, dev, i_ino, 0)) {
@@ -253,11 +252,11 @@ int BPF_PROG(exit_vfs_read) {
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_read_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
@@ -279,10 +278,10 @@ int BPF_PROG(enter_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino,0)) {
     return 0;
   }
@@ -290,11 +289,11 @@ int BPF_PROG(enter_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
@@ -311,10 +310,10 @@ int BPF_PROG(exit_filemap_get_pages,struct kiocb *iocb, struct iov_iter *iter,
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino,0)) {
     return 0;
   }
@@ -342,7 +341,7 @@ int BPF_PROG(trace_mark_page_accessed,struct page *page){
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(page, mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -350,11 +349,11 @@ int BPF_PROG(trace_mark_page_accessed,struct page *page){
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, mark_page_accessed, vfs_layer);
   loff_t alloffset = (BPF_CORE_READ(page,index) <<12);
   set_fs_info(task_info, i_ino, 0, 0, alloffset,4096);
@@ -377,11 +376,11 @@ int BPF_PROG(trace_enter_filemap_write_and_wait_range,struct address_space *mapp
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_write_and_wait_range_enter, vfs_layer);
   set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
@@ -405,11 +404,11 @@ int BPF_PROG(trace_exit_filemap_write_and_wait_range,struct address_space *mappi
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_write_and_wait_range_exit, vfs_layer);
   set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
@@ -432,11 +431,11 @@ int BPF_PROG(trace_enter_filemap_range_needs_writeback,struct address_space *map
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_range_needs_writeback_enter, vfs_layer);
   set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
@@ -452,7 +451,7 @@ int BPF_PROG(trace_exit_filemap_range_needs_writeback,struct address_space *mapp
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(mapping, host);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -460,11 +459,11 @@ int BPF_PROG(trace_exit_filemap_range_needs_writeback,struct address_space *mapp
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_range_needs_writeback_exit, vfs_layer);
   set_fs_info(task_info, i_ino, 0, 0, start_byte,end_byte+1-start_byte);
   bpf_ringbuf_submit(task_info, 0);
@@ -478,9 +477,9 @@ int BPF_PROG(trace_enter_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter)
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path); ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path); ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -488,11 +487,11 @@ int BPF_PROG(trace_enter_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter)
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
@@ -508,10 +507,10 @@ int BPF_PROG(trace_exit_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter){
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -519,11 +518,11 @@ int BPF_PROG(trace_exit_iomap_dio_rw,struct kiocb *iocb, struct iov_iter *iter){
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, filemap_get_pages_enter, vfs_layer);
   loff_t offset = BPF_CORE_READ(iocb, ki_pos);
   unsigned long count = BPF_CORE_READ(iter, count);
@@ -593,10 +592,10 @@ int BPF_PROG(enter_vfs_write) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -605,17 +604,17 @@ int BPF_PROG(enter_vfs_write) {
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
-  // if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
-    // if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
-    //   goto go_on;
-    // }
-  // }
-// go_on:;
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
+  if(bpf_map_lookup_elem(&ino_path_map, &i_ino) == NULL){
+    if(!read_and_store_abs_path(&p,&i_ino,BPF_CORE_READ(inode,i_sb,s_bdev))){
+      goto go_on;
+    }
+  }
+go_on:;
   set_common_info(task_info, tgid, tid, vfs_write_enter, vfs_layer);
   loff_t offset = 0;
   bpf_probe_read(&offset, sizeof(loff_t), pos);
@@ -638,10 +637,10 @@ int BPF_PROG(exit_vfs_write) {
   pid_t tid = id & 0xffffffff;
   pid_t tgid = id >> 32;
   struct inode *inode = BPF_CORE_READ(file, f_inode);
-  // struct path p = BPF_CORE_READ(file, f_path);
-  // ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
+  struct path p = BPF_CORE_READ(file, f_path);
+  ino_t i_inop = BPF_CORE_READ(p.dentry, d_parent, d_inode, i_ino);
   ino_t i_ino = BPF_CORE_READ(inode, i_ino);
-  // dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
+  dev_t dev = BPF_CORE_READ(inode, i_sb, s_dev);
   if (common_filter(tid, tgid, 0, i_ino, 0)) {
     return 0;
   }
@@ -650,11 +649,11 @@ int BPF_PROG(exit_vfs_write) {
   if (!task_info) {
     return 0;
   }
-  // bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
-  // if (task_comm_filter(task_info->comm)) {
-  //   bpf_ringbuf_discard(task_info, 0);
-  //   return 0;
-  // }
+  bpf_get_current_comm(&task_info->comm, MAX_COMM_LEN);
+  if (task_comm_filter(task_info->comm)) {
+    bpf_ringbuf_discard(task_info, 0);
+    return 0;
+  }
   set_common_info(task_info, tgid, tid, vfs_write_exit, vfs_layer);
   loff_t offset = 0;
   if (pos != NULL) {
