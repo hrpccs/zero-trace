@@ -6,7 +6,7 @@ We have develop a part of the job, which can already trace the whole path that t
 
 You can check our [development report](doc/development_report.md). The report describes our job. And you can also reffer our github https://github.com/hrpccs/zero-trace.
 
-![arch](gallery/arch.svg)
+![arch](gallery/arch.png)
 
 
 

@@ -63,7 +63,7 @@ eBPF-tracing工具是基于eBPF技术实现的内核跟踪工具。它能够有�
 
 <!-- ![架构图.drawio](http://hrpccs.oss-cn-guangzhou.aliyuncs.com/img/架构图.drawio.svg) -->
 
-![架构图](../gallery/arch.svg)
+![架构图](../gallery/arch.png)
 
 上面设计了诸多模块，下面分为内核态程序和用户态程序进行介绍。
 
