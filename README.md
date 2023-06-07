@@ -1,5 +1,5 @@
 # Introduction
-We are currently developing a tracing framework based on eBPF, which aims to trace the entire path of system call with low overhead. This project was inspired by [oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
+We are currently developing a tracing framework based on eBPF, which aims to trace the entire path of system calls under low overhead. This project was inspired by [oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
 
 We have completed a part of the framework. It is now able to trace the entire path of the read/write syscall within the Linux I/O stack, including the FS layer and Block layer. And we call this part of the framework "IO wpTracer" (IO whole path tracer).
 
@@ -24,7 +24,7 @@ To use BTF and CO-RE, `CONFIG_DEBUG_INFO_BTF=y` and `CONFIG_DEBUG_INFO_BTF_MODUL
 - RHEL 8.2+
 - Debian 11+
 
-And to build bpf applications, you should install the following development tools:
+And to build bpf applications, you should also install the following development tools:
 
 ```
 # Ubuntu
