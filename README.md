@@ -1,14 +1,14 @@
-### Introduction
+# Introduction
 
-We are now developing a tracing framework based on eBPF. It aims to trace the whole system call path within the linux kernel with low overhead and the ability, which is inspired by [oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework)
+We are currently developing a tracing framework based on eBPF, which aims to trace the entire system call path within the Linux kernel with low overhead. This project was inspired by [oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
 
-We have developed a part of the job. it can already trace the whole path that the read/wrtie syscall run through within linux I/O stack , including FS layer and Block layer. 
+We have developed a part of the job. it is able to trace the entire path that the read/wrtie syscall run through within linux I/O stack , including FS layer and Block layer. 
 
 And we call this part of job `IO wpTracer (IO whole path tracer)`
 
 **You can check our [development report](doc/development_report.md)**. The report describes our job.
 
-And you can also reffer our github https://github.com/hrpccs/zero-trace.
+And you can also visit our GitHub repository https://github.com/hrpccs/zero-trace.
 
 ![arch](gallery/arch.png)
 
