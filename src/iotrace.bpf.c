@@ -468,9 +468,22 @@ int BPF_KPROBE_SYSCALL(sync_file_range, int fd, loff_t offset, loff_t nbytes,
 
 /* vfs layer */
 
+int inline vfs_filter_inode(ino_t inode){
+  if(filter_config.inode != 0 && filter_config.inode != inode){
+    return 1;
+  }
+  // check inode_ref_map
+  int *inode_ref = bpf_map_lookup_elem(&inode_ref_map, &inode);
+  if (inode_ref == NULL) {
+    return 1;
+  }
+
+  return 0;
+}
+
 // 对于 vfs 层的挂载点，由于是完全同步的，所以直接通过 pid 过滤即可
 // 传回用户态时，如果前置 syscall 没有出现，那么把事件丢弃
-// 如果是异步的，才需要通过 inode 过滤 TODO:
+// 也需要通过 inode 过滤 ，因为内核态查 map 的开销相对小 TODO:
 // 对于后续 block layer 层需要用到 inode 号的对应
 // 可以由用户态读 fd 和 inode map 来获取关联
 // // do_iter_read
@@ -483,24 +496,51 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   unsigned long nr_bytes = iter->count;
   loff_t *pos = NULL;
   loff_t offset = 0;
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
 
+
   // bpf_printk("do_iter_read enter:	ino %lu offset %lu len %lu\n", ino, offset, nr_bytes);
   return 0;
 }
 SEC("fexit/do_iter_read")
 int BPF_PROG(trace_do_iter_read_exit, struct file *file) {
-  // ino_t ino = file->f_inode->i_ino;
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
+
   // bpf_printk("do_iter_read exit:	ino %lu\n", ino);
   return 0;
 }
 // do_iter_write
 SEC("fentry/do_iter_write")
 int BPF_PROG(trace_do_iter_write, struct file *file, struct iov_iter *iter) {
+  if (!vfs_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   unsigned long nr_bytes = iter->count;
   loff_t *pos = NULL;
   loff_t offset = 0;
@@ -513,16 +553,36 @@ int BPF_PROG(trace_do_iter_write, struct file *file, struct iov_iter *iter) {
 }
 SEC("fexit/do_iter_write")
 int BPF_PROG(trace_do_iter_write_exit, struct file *file) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
-  bpf_printk("do_iter_write exit:	ino %lu\n", ino);
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
+  // bpf_printk("do_iter_write exit:	ino %lu\n", ino);
   return 0;
 }
 // vfs_iocb_iter_write
 SEC("fentry/vfs_iocb_iter_write")
 int BPF_PROG(trace_vfs_iocb_iter_write, struct file *file, struct kiocb *iocb,
              struct iov_iter *iter) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   struct inode *inode = file->f_inode;
-  ino_t ino = inode->i_ino;
   unsigned long nr_bytes = iter->count;
   loff_t offset = iocb->ki_pos;
   bpf_printk("vfs_iocb_iter_write enter:	ino %lu offset %lu len %lu\n",
@@ -532,8 +592,18 @@ int BPF_PROG(trace_vfs_iocb_iter_write, struct file *file, struct kiocb *iocb,
 SEC("fexit/vfs_iocb_iter_write")
 int BPF_PROG(trace_vfs_iocb_iter_write_exit, struct file *file,
              struct kiocb *iocb, struct iov_iter *iter, ssize_t ret) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   struct inode *inode = file->f_inode;
-  ino_t ino = inode->i_ino;
   bpf_printk("vfs_iocb_iter_write exit:	ino %lu\n", ino);
   return 0;
 }
@@ -541,8 +611,18 @@ int BPF_PROG(trace_vfs_iocb_iter_write_exit, struct file *file,
 SEC("fentry/vfs_iocb_iter_read")
 int BPF_PROG(trace_vfs_iocb_iter_read, struct file *file, struct kiocb *iocb,
              struct iov_iter *iter) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   struct inode *inode = file->f_inode;
-  ino_t ino = inode->i_ino;
   unsigned long nr_bytes = iter->count;
   loff_t offset = iocb->ki_pos;
   bpf_printk("vfs_iocb_iter_read enter:	ino %lu offset %lu len %lu\n", ino,
@@ -552,15 +632,34 @@ int BPF_PROG(trace_vfs_iocb_iter_read, struct file *file, struct kiocb *iocb,
 SEC("fexit/vfs_iocb_iter_read")
 int BPF_PROG(trace_vfs_iocb_iter_read_exit, struct file *file,
              struct kiocb *iocb, struct iov_iter *iter, ssize_t ret) {
-  struct inode *inode = file->f_inode;
-  ino_t ino = inode->i_ino;
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   bpf_printk("vfs_iocb_iter_read exit:	ino %lu\n", ino);
   return 0;
 }
 // vfs_read
 SEC("fentry/vfs_read")
 int BPF_PROG(trace_vfs_read, struct file *file, char *buf, size_t count) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   unsigned long nr_bytes = count;
   loff_t *pos = NULL;
   loff_t offset = 0;
@@ -572,14 +671,34 @@ int BPF_PROG(trace_vfs_read, struct file *file, char *buf, size_t count) {
 }
 SEC("fexit/vfs_read")
 int BPF_PROG(trace_vfs_read_exit, struct file *file, char *buf, size_t count) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   bpf_printk("vfs_read exit:	ino %lu\n", ino);
   return 0;
 }
 // vfs_write
 SEC("fentry/vfs_write")
 int BPF_PROG(trace_vfs_write, struct file *file, char *buf, size_t count) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   unsigned long nr_bytes = count;
   loff_t *pos = NULL;
   loff_t offset = 0;
@@ -591,7 +710,17 @@ int BPF_PROG(trace_vfs_write, struct file *file, char *buf, size_t count) {
 }
 SEC("fexit/vfs_write")
 int BPF_PROG(trace_vfs_write_exit, struct file *file, char *buf, size_t count) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   bpf_printk("vfs_write exit:	ino %lu\n", ino);
   return 0;
 }
@@ -599,22 +728,18 @@ int BPF_PROG(trace_vfs_write_exit, struct file *file, char *buf, size_t count) {
 SEC("fentry/vfs_fsync_range")
 int BPF_PROG(trace_vfs_fsync_range, struct file *file, loff_t start, loff_t end,
              int datasync) {
-  // 0. enable?
-  if (!vfs_enable) {
+  if(!vfs_enable){
     return 0;
   }
-  // 1. get info from incoming function
-  // pid
-  u64 id = bpf_get_current_pid_tgid();
-  pid_t tgid = id >> 32;
-  pid_t tid = id & 0xffffffff;
-  pid_filter(tgid, tid);
-
-  // 2. get info from file
-  // fd, offset, nbytes
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
-  bpf_printk("vfs_fsync_range enter:	ino %lu start %lu end %lu\n", ino,
-             start, end);
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
+
   return 0;
 }
 
@@ -622,7 +747,18 @@ int BPF_PROG(trace_vfs_fsync_range, struct file *file, loff_t start, loff_t end,
 SEC("fentry/generic_file_read_iter")
 int BPF_PROG(trace_generic_file_read_iter, struct kiocb *iocb,
              struct iov_iter *iter) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
   bpf_printk("generic_file_read_iter enter:	ino %lu offset %lu len %lu\n",
@@ -632,18 +768,36 @@ int BPF_PROG(trace_generic_file_read_iter, struct kiocb *iocb,
 SEC("fexit/generic_file_read_iter")
 int BPF_PROG(trace_generic_file_read_iter_exit, struct kiocb *iocb,
              struct iov_iter *iter, ssize_t ret) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
-  loff_t offset = iocb->ki_pos;
-  unsigned long nr_bytes = iter->count;
-  bpf_printk("generic_file_read_iter exit:	ino %lu offset %lu len %lu\n",
-             ino, offset, nr_bytes);
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   return 0;
 }
 // generic_file_write_iter
 SEC("fentry/generic_file_write_iter")
 int BPF_PROG(trace_generic_file_write_iter, struct kiocb *iocb,
              struct iov_iter *iter) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
   bpf_printk("generic_file_write_iter enter:	ino %lu offset %lu len %lu\n",
@@ -653,11 +807,18 @@ int BPF_PROG(trace_generic_file_write_iter, struct kiocb *iocb,
 SEC("fexit/generic_file_write_iter")
 int BPF_PROG(trace_generic_file_write_iter_exit, struct kiocb *iocb,
              struct iov_iter *iter, ssize_t ret) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
-  loff_t offset = iocb->ki_pos;
-  unsigned long nr_bytes = iter->count;
-  bpf_printk("generic_file_write_iter exit:	ino %lu offset %lu len %lu\n",
-             ino, offset, nr_bytes);
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   return 0;
 }
 
@@ -665,7 +826,18 @@ int BPF_PROG(trace_generic_file_write_iter_exit, struct kiocb *iocb,
 SEC("fentry/filemap_get_pages")
 int BPF_PROG(trace_filemap_get_pages, struct kiocb *iocb,
              struct iov_iter *iter) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
   bpf_printk("filemap_get_pages enter:	ino %lu offset %lu len %lu\n", ino,
@@ -676,11 +848,18 @@ int BPF_PROG(trace_filemap_get_pages, struct kiocb *iocb,
 SEC("fexit/filemap_get_pages")
 int BPF_PROG(trace_filemap_get_pages_exit, struct kiocb *iocb,
              struct iov_iter *iter, ssize_t ret) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
-  loff_t offset = iocb->ki_pos;
-  unsigned long nr_bytes = iter->count;
-  bpf_printk("filemap_get_pages exit:	ino %lu offset %lu len %lu\n", ino,
-             offset, nr_bytes);
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   return 0;
 }
 
@@ -688,7 +867,17 @@ int BPF_PROG(trace_filemap_get_pages_exit, struct kiocb *iocb,
 SEC("fentry/file_write_and_wait_range")
 int BPF_PROG(trace_file_write_and_wait_range, struct file *file, loff_t start,
              loff_t end) {
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
   ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   bpf_printk("file_write_and_wait_range:	ino %lu start %lu end %lu\n",
              ino, start, end);
   return 0;
@@ -699,21 +888,36 @@ int BPF_PROG(trace_file_write_and_wait_range, struct file *file, loff_t start,
 SEC("fentry/iomap_dio_rw")
 int BPF_PROG(trace_enter_iomap_dio_rw, struct kiocb *iocb,
              struct iov_iter *iter) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
-  loff_t offset = iocb->ki_pos;
-  unsigned long nr_bytes = iter->count;
-  bpf_printk("iomap_dio_rw enter:	ino %lu offset %lu len %lu\n", ino,
-             offset, nr_bytes);
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
+
   return 0;
 }
 SEC("fexit/iomap_dio_rw")
 int BPF_PROG(trace_exit_iomap_dio_rw, struct kiocb *iocb, struct iov_iter *iter,
              ssize_t ret) {
-  ino_t ino = iocb->ki_filp->f_inode->i_ino;
-  loff_t offset = iocb->ki_pos;
-  unsigned long nr_bytes = iter->count;
-  bpf_printk("iomap_dio_rw exit:	ino %lu offset %lu len %lu\n", ino,
-             offset, nr_bytes);
+  if(!vfs_enable){
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  struct file *file = iocb->ki_filp;
+  ino_t ino = file->f_inode->i_ino;
+  if(vfs_filter_inode(ino)){
+    return 0;
+  }
   return 0;
 }
 
