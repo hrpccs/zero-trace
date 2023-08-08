@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.0)
 
-project(iotracer)
+project(top)
 
 add_subdirectory(src)
 

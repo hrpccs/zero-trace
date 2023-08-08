@@ -8,3 +8,5 @@ src/libbpf
 .vscode/
 tmp/
 *.log
+build/
+.cache/

@@ -1,6 +1,5 @@
 # FILEPATH: /home/hrpccs/workspace/io-tracer/CMakeLists.txt
-
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 
 project(iotracer)
 
@@ -69,7 +68,6 @@ add_custom_command(
     COMMAND bpftool btf dump file /sys/kernel/btf/vmlinux format c > ${CMAKE_SOURCE_DIR}/include/vmlinux.h
 )
 
+# set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
-
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
