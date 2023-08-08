@@ -1068,23 +1068,37 @@ struct {
   __type(key, struct request *);
   __type(value, int);
 } request_ref_map SEC(".maps");
-SEC("tp_btf/block_split") // 不影响主 bio，应该不用管
-int handle_tp3(struct bpf_raw_tracepoint_args *ctx)
-{
-	struct bio *bio = (struct bio *)(ctx->args[0]);
-	sector_t sector = bio->bi_iter.bi_sector;
-	sector_t new_sector = (sector_t)(ctx->args[1]);
-	bpf_printk("block_split target bio: %lx sector: %ld new_sector: %ld\n", bio, sector,
-		   new_sector);
-	return 0;
-}
+//TODO: 进程级别的 io 活动分析
+
+// SEC("tp_btf/block_split") // 不影响主 bio，应该不用管
+// int handle_tp3(struct bpf_raw_tracepoint_args *ctx)
+// {
+// 	struct bio *bio = (struct bio *)(ctx->args[0]);
+// 	sector_t sector = bio->bi_iter.bi_sector;
+// 	sector_t new_sector = (sector_t)(ctx->args[1]);
+// 	bpf_printk("block_split target bio: %lx sector: %ld new_sector: %ld\n", bio, sector,
+// 		   new_sector);
+// 	return 0;
+// }
 
 // remap bio/rq 不管
-
 SEC("tp_btf/block_bio_bounce") // 可以很好反映性能的事件，需要额外的数据拷贝和内存申请
 int handle_tp6(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!block_enable){
+    return 0;
+  }
+
 	struct bio *bio = (struct bio *)(ctx->args[0]);
+  // check bio_ref_map
+  // if not exsits, return
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("bio_ref_map: %d\n", *bio_ref);
+  }
+
 	sector_t sector = bio->bi_iter.bi_sector;
 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
 	bpf_printk("block_bio_bounce target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
@@ -1092,21 +1106,46 @@ int handle_tp6(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-SEC("tp_btf/block_bio_queue")
+SEC("tp_btf/block_bio_queue") // 开始追踪一个 bio
 int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!block_enable){
+    return 0;
+  }
 	struct bio *bio = (struct bio *)(ctx->args[0]);
+	struct bio_vec *first_bv = bio->bi_io_vec;
+	struct page *first_page = first_bv->bv_page;
+	struct inode *inode = first_page->mapping->host;
+	ino_t i_ino = inode->i_ino;
+  // check if inode is in the ino_ref_map
+  // if not, return
+  int *ino_ref = bpf_map_lookup_elem(&ino_ref_map, &i_ino);
+  if (ino_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("ino_ref_map: %d\n", *ino_ref);
+  }
+
+  // add to bio_ref_map
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    int a = 0;
+    bpf_map_update_elem(&bio_ref_map, &bio, &a, BPF_ANY);
+  } else {
+    bpf_debug("bio_queue already in bio_ref_map\n");
+  }
+
+
+  // 近似的计算 bio 对应文件逻辑地址的大致范围（认为 bio 的 bi_vec 是顺序递增的）
+  // 用于和 vfs 的请求进行匹配
+
 	sector_t sector = bio->bi_iter.bi_sector;
 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	struct bio_vec *first_bv = bio->bi_io_vec;
 	int last_index = (bio->bi_vcnt - 1) & (512 - 1);
 	struct bio_vec last_bv;
 	bpf_core_read(&last_bv, sizeof(struct bio_vec), first_bv + last_index);
 	int last_page_index = BPF_CORE_READ(last_bv.bv_page, index);
 	// struct bio_vec *last_bv = &bio->bi_io_vec[last_index];
-	struct page *first_page = first_bv->bv_page;
-	struct inode *inode = first_page->mapping->host;
-	ino_t i_ino = inode->i_ino;
 	loff_t start_offset = (first_page->index << 12) + first_bv->bv_offset;
 	loff_t end_offset = (last_page_index << 12) + last_bv.bv_offset + last_bv.bv_len;
 	bpf_printk("block_bio_queue target  bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
@@ -1116,43 +1155,142 @@ int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-SEC("tp_btf/block_bio_backmerge")
-int handle_tp8(struct bpf_raw_tracepoint_args *ctx)
+SEC("fentry/__rq_qos_track")
+int BPF_PROG(rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio)
 {
-	struct bio *bio = (struct bio *)(ctx->args[0]);
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	bpf_printk("block_bio_backmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
+  if(!block_enable){
+    return 0;
+  }
+  // check bio_ref_map
+  // if exsits,  add rq to request_ref_map
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("bio_ref_map: %d\n", *bio_ref);
+  }
+  // add to request_ref_map
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    int a = 0;
+    bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+  } else {
+    bpf_debug("rq_merge:request already in request_ref_map\n");
+  }
+	// bpf_printk("rq_qos_track target bio: %lx rq: %lx\n", bio, rq);
 	return 0;
 }
 
-SEC("tp_btf/block_bio_frontmerge")
-int handle_tp9(struct bpf_raw_tracepoint_args *ctx)
+SEC("fentry/__rq_qos_merge") // 代替 block_bio_merge, 用来建立 bio 和 request 的关系
+int BPF_PROG(rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio)
 {
-	struct bio *bio = (struct bio *)(ctx->args[0]);
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	bpf_printk("block_bio_frontmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
+  if(!block_enable){
+    return 0;
+  }
+  // check bio_ref_map
+  // if exsits,  add rq to request_ref_map
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("bio_ref_map: %d\n", *bio_ref);
+  }
+  // add to request_ref_map
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    int a = 0;
+    bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+  } else {
+    bpf_debug("rq_merge:request already in request_ref_map\n");
+  }
+	// bpf_printk("rq_qos_merge target bio: %lx rq: %lx\n", bio, rq);
 	return 0;
 }
 
-SEC("tp_btf/block_bio_complete")
-int handle_tp10(struct bpf_raw_tracepoint_args *ctx)
+// SEC("tp_btf/block_bio_backmerge")
+// int handle_tp8(struct bpf_raw_tracepoint_args *ctx)
+// {
+// 	struct bio *bio = (struct bio *)(ctx->args[0]);
+// 	sector_t sector = bio->bi_iter.bi_sector;
+// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
+// 	bpf_printk("block_bio_backmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
+// 		   nr_sector);
+// 	return 0;
+// }
+
+// SEC("tp_btf/block_bio_frontmerge")
+// int handle_tp9(struct bpf_raw_tracepoint_args *ctx)
+// {
+// 	struct bio *bio = (struct bio *)(ctx->args[0]);
+// 	sector_t sector = bio->bi_iter.bi_sector;
+// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
+// 	bpf_printk("block_bio_frontmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
+// 		   nr_sector);
+// 	return 0;
+// }
+SEC("fentry/__rq_qos_done_bio") // 代替 block_bio_complete, 用来删除 bio 的引用
+int BPF_PROG(rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
 {
-	struct bio *bio = (struct bio *)(ctx->args[1]);
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	bpf_printk("block_bio_complete target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
+  if(!block_enable){
+    return 0;
+  }
+  // if bio is in bio_ref_map, delete it
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    return 0;
+  } else {
+    bpf_map_delete_elem(&bio_ref_map, &bio);
+  }
+
+	bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
 	return 0;
 }
+
+//rq_qos_throttle
+SEC("fentry/__rq_qos_throttle") // 可以对性能有观测作用,意味着 bio 走特殊路径
+int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
+{
+  if(!block_enable){
+    return 0;
+  }
+  // if bio is not in bio_ref_map, return
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("bio_ref_map: %d\n", *bio_ref);
+  }
+	bpf_printk("rq_qos_throttle target  bio: %lx\n", bio);
+	return 0;
+}
+
+// SEC("tp_btf/block_bio_complete")
+// int handle_tp10(struct bpf_raw_tracepoint_args *ctx)
+// {
+// 	struct bio *bio = (struct bio *)(ctx->args[1]);
+// 	sector_t sector = bio->bi_iter.bi_sector;
+// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
+// 	bpf_printk("block_bio_complete target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
+// 		   nr_sector);
+// 	return 0;
+// }
 
 SEC("tp_btf/block_rq_insert")
 int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
 { // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+  if(!block_enable){
+    return 0;
+  }
+  // check if request is in request_ref_map
+  // if not, return
 	struct request *rq = (struct request *)(ctx->args[0]);
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
+
 	long nr_sector = rq->__data_len;
 	sector_t sector = rq->__sector;
 	bpf_printk(" rq_insert target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
@@ -1162,7 +1300,18 @@ int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
 SEC("tp_btf/block_rq_issue")
 int handle_tp(struct bpf_raw_tracepoint_args *ctx)
 { // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+  if(!block_enable){
+    return 0;
+  }
+  // check if request is in request_ref_map
+  // if not, return
 	struct request *rq = (struct request *)(ctx->args[0]);
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	long nr_sector = rq->__data_len;
 	sector_t sector = rq->__sector;
 	bpf_printk(" rq_issue target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
@@ -1181,38 +1330,45 @@ int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-SEC("fentry/__rq_qos_track")
-int BPF_PROG(rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio)
-{
-	bpf_printk("rq_qos_track target bio: %lx rq: %lx\n", bio, rq);
-	return 0;
-}
 
-SEC("fentry/__rq_qos_merge")
-int BPF_PROG(rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio)
-{
-	bpf_printk("rq_qos_merge target bio: %lx rq: %lx\n", bio, rq);
-	return 0;
-}
 
-SEC("fentry/__rq_qos_done")
+SEC("fentry/__rq_qos_done") // 用来代替 block_rq_complete, 用来删除 request 的引用
 int BPF_PROG(rq_qos_done, struct rq_qos *q, struct request *rq)
 {
+  if(!block_enable){
+    return 0;
+  }
+  // if request is in request_ref_map, delete it
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_map_delete_elem(&request_ref_map, &rq);
+  }
+
+
 	bpf_printk("rq_qos_done target rq: %lx\n", rq);
 	return 0;
 }
 
-SEC("fentry/__rq_qos_done_bio")
-int BPF_PROG(rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
-{
-	bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
-	return 0;
-}
+
 
 //rq_qos_issue
 SEC("fentry/__rq_qos_issue")
 int BPF_PROG(rq_qos_issue, struct rq_qos *q, struct request *rq)
 {
+  if(!block_enable){
+    return 0;
+  }
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
+
 	bpf_printk("rq_qos_issue target  rq: %lx\n", rq);
 	return 0;
 }
@@ -1221,43 +1377,41 @@ int BPF_PROG(rq_qos_issue, struct rq_qos *q, struct request *rq)
 SEC("fentry/__rq_qos_requeue")
 int BPF_PROG(rq_qos_requeue, struct rq_qos *q, struct request *rq)
 {
+  if(!block_enable){
+    return 0;
+  }
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("rq_qos_requeue target  rq: %lx\n", rq);
 	return 0;
 }
 
-//rq_qos_throttle
-SEC("fentry/__rq_qos_throttle") // 可以对性能有观测作用,意味着 bio 走特殊路径
-int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
-{
-	bpf_printk("rq_qos_throttle target  bio: %lx\n", bio);
-	return 0;
-}
-
-SEC("tp_btf/block_unplug")
-int handle_block_unplug(struct bpf_raw_tracepoint_args *ctx)
-{
-	struct request_queue *q = (struct request_queue *)(ctx->args[0]);
-	dev_t dev = q->disk->major << 20 | q->disk->first_minor;
-	bpf_printk("block_unplug target q: %lx dev: %lx \n", q, dev);
-	return 0;
-}
-
-SEC("tp_btf/block_plug")
-int handle_block_plug(struct bpf_raw_tracepoint_args *ctx)
-{
-	struct request_queue *q = (struct request_queue *)(ctx->args[0]);
-	dev_t dev = q->disk->major << 20 | q->disk->first_minor;
-	bpf_printk("block_plug target q: %lx dev: %lx \n", q, dev);
-	return 0;
-}
 
 /* driver layer */
 /* nvme */
 SEC("tp_btf/nvme_setup_cmd")
 int handle_tp_nvme_1(struct bpf_raw_tracepoint_args *ctx)
 { // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+  if(!nvme_enable){
+    return 0;
+  }
 	struct request *rq = (struct request *)(ctx->args[0]);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	struct nvme_command *cmd = (struct nvme_command *)(ctx->args[1]);
+
 
 	bpf_printk("nvme_setup_cmd rq: %llx\n", rq);
 	return 0;
@@ -1265,16 +1419,38 @@ int handle_tp_nvme_1(struct bpf_raw_tracepoint_args *ctx)
 
 SEC("tp_btf/nvme_complete_rq")
 int handle_tp_nvme_2(struct bpf_raw_tracepoint_args *ctx)
-{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+{ 
+  if(!nvme_enable){
+    return 0;
+  }
 	struct request *rq = (struct request *)(ctx->args[0]);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("nvme_complete_rq rq: %llx\n", rq);
 	return 0;
 }
 
 SEC("tp_btf/nvme_sq")
 int handle_tp_nvme_4(struct bpf_raw_tracepoint_args *ctx)
-{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+{ 
+  if(!nvme_enable){
+    return 0;
+  }
 	struct request *rq = (struct request *)(ctx->args[0]);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("nvme_sq rq: %llx\n", rq);
 	return 0;
 }
@@ -1283,8 +1459,20 @@ int handle_tp_nvme_4(struct bpf_raw_tracepoint_args *ctx)
 SEC("tp_btf/scsi_dispatch_cmd_start")
 int handle_tp_scsi_1(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!scsi_enable){
+    return 0;
+  }
 	struct scsi_cmnd *cmd = (struct scsi_cmnd *)(ctx->args[0]);
 	struct request *rq = cmd_to_rq(cmd);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
+
 	bpf_printk("scsi_dispatch_cmd_start rq: %lx\n", (unsigned long)rq);
 	return 0;
 }
@@ -1292,8 +1480,19 @@ int handle_tp_scsi_1(struct bpf_raw_tracepoint_args *ctx)
 SEC("tp_btf/scsi_dispatch_cmd_error")
 int handle_tp_scsi_2(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!scsi_enable){
+    return 0;
+  }
 	struct scsi_cmnd *cmd = (struct scsi_cmnd *)(ctx->args[0]);
 	struct request *rq = cmd_to_rq(cmd);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("scsi_dispatch_cmd_error rq: %lx\n", (unsigned long)rq);
 	return 0;
 }
@@ -1301,8 +1500,19 @@ int handle_tp_scsi_2(struct bpf_raw_tracepoint_args *ctx)
 SEC("tp_btf/scsi_dispatch_cmd_done")
 int handle_tp_scsi_3(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!scsi_enable){
+    return 0;
+  }
 	struct scsi_cmnd *cmd = (struct scsi_cmnd *)(ctx->args[0]);
 	struct request *rq = cmd_to_rq(cmd);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("scsi_dispatch_cmd_done rq: %lx\n", (unsigned long)rq);
 
 	return 0;
@@ -1311,8 +1521,19 @@ int handle_tp_scsi_3(struct bpf_raw_tracepoint_args *ctx)
 SEC("tp_btf/scsi_dispatch_cmd_timeout")
 int handle_tp_scsi_4(struct bpf_raw_tracepoint_args *ctx)
 {
+  if(!scsi_enable){
+    return 0;
+  }
 	struct scsi_cmnd *cmd = (struct scsi_cmnd *)(ctx->args[0]);
 	struct request *rq = cmd_to_rq(cmd);
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	bpf_printk("scsi_dispatch_cmd_timeout rq: %lx\n", (unsigned long)rq);
 	return 0;
 }
@@ -1326,7 +1547,18 @@ int handle_tp_scsi_4(struct bpf_raw_tracepoint_args *ctx)
 SEC("fentry/virtio_queue_rq")
 int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
 {
+    if(!virtio_enable){
+    return 0;
+  }
 	struct request *rq = bd->rq;
+  // check if request is in request_ref_map
+  // if not, return
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("request_ref_map: %d\n", *request_ref);
+  }
 	loff_t offset = rq->__sector << 9;
 	unsigned long nr_bytes = rq->__data_len << 9;
 	bpf_printk("virtio_queue_rq target rq: %lx offset %lx bytes %lx\n", rq, offset, nr_bytes);
