@@ -26,8 +26,10 @@
 #include <time.h>
 #include <unistd.h>
 #include <utility>
+#include "qemu_uprobe.skel.h"
 
 struct iotrace_bpf *skel;
+struct qemu_uprobe_bpf *qemu_uprobe_skel;
 pid_t curr_pid = 0;
 FILE *output_file = NULL;
 
@@ -54,17 +56,11 @@ static void sig_handler(int sig) {
 int once = 0;
 
 static int handle_event(void *ctx, void *data, size_t data_sz) {
-  if(data_sz == sizeof(bvec_array_info)){
-    struct bvec_array_info* bvec_info = (struct bvec_array_info*)data;
-    printf("bvec cnt %d\n",bvec_info->bvec_cnt);
-    
-  }
+  // assert(false);
   struct event *e = (struct event *)data;
-  if (e->pid == curr_pid || e->tid == curr_pid) {
-    return 0;
-  }
   const char *event_type_str = kernel_hook_type_str[e->event_type];
   const char *layer_type_str = info_type_str[e->info_type];
+  fprintf(stdout,"event type: %s, layer type: %s\n", event_type_str, layer_type_str);
   return 0;
 }
 
@@ -154,15 +150,15 @@ void parse_args(int argc, char **argv) {
     dev_path.assign(dev);
   }
 
-  TraceConfig config =
-      TraceConfig(pid, tid, std::move(dev_path), file, directory,
-                  time_threshold, std::move(output_path), std::move(command),skel,time_duration);
+  // TraceConfig config =
+  //     TraceConfig(pid, tid, std::move(dev_path), file, directory,
+  //                 time_threshold, std::move(output_path), std::move(command),skel,time_duration);
 
   // Do something with the parsed arguments
   // #ifdef CONFIG_BLK_CGROUP
   // #endif
-  auto handler = std::make_unique<IOEndHandler>(std::move(config));
-  analyser = new IOAnalyser(std::move(handler));
+  // auto handler = std::make_unique<IOEndHandler>(std::move(config));
+  // analyser = new IOAnalyser(std::move(handler));
 
   if (dev != NULL) {
     // get dev_t of the device
@@ -185,6 +181,7 @@ int main(int argc, char **argv) {
 
   // sudo mount -t debugfs none /sys/kernel/debug
   LIBBPF_OPTS(bpf_object_open_opts, open_opts);
+  int rb_fd;
   struct ring_buffer *rb = NULL;
   int err;
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -202,14 +199,22 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to open and load BPF skeleton\n");
     return 1;
   }
-  printf("BPF skeleton loaded\n");
+  qemu_uprobe_skel = qemu_uprobe_bpf::open(&open_opts);
+  if (!qemu_uprobe_skel) {
+    fprintf(stderr, "Failed to open and load BPF skeleton\n");
+    return 1;
+  }
 
   // modify the bss section of the bpf program
   parse_args(argc, argv);
 
   /* Load & verify BPF programs */
-  // err = iotrace_bpf__load(skel);
   err = iotrace_bpf::load(skel);
+  if (err) {
+    fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+    goto cleanup;
+  }
+  err = qemu_uprobe_bpf::load(qemu_uprobe_skel);
   if (err) {
     fprintf(stderr, "Failed to load and verify BPF skeleton\n");
     goto cleanup;
@@ -221,8 +226,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to attach BPF skeleton\n");
     goto cleanup;
   }
+  err = qemu_uprobe_bpf::attach(qemu_uprobe_skel);
+  if (err) {
+    fprintf(stderr, "Failed to attach BPF skeleton\n");
+    goto cleanup;
+  }
   /* Set up ring buffer polling */
-  rb = ring_buffer__new(bpf_map__fd(skel->maps.rb), analyse, NULL, NULL);
+  rb_fd = bpf_map__fd(skel->maps.rb);
+  rb = ring_buffer__new(rb_fd, handle_event, NULL, NULL);
   if (!rb) {
     err = -1;
     fprintf(stderr, "Failed to create ring buffer\n");
@@ -230,6 +241,7 @@ int main(int argc, char **argv) {
   }
   /* Process events */
   curr_pid = getpid();
+  printf("Tracing started\n");
   while (!exiting) {
     err = ring_buffer__poll(rb, 100 /* timeout, ms */);
     /* Ctrl-C will cause -EINTR */

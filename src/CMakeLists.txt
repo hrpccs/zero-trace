@@ -20,9 +20,11 @@ file(GLOB_RECURSE CPP_SOURCES "*.cpp")
 # Add the C and C++ sources to the project
 add_executable(iotracer  ${CPP_SOURCES})
 # include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include /usr/include)
+set(QEMU_PATH /home/hrpccs/workspace/qemu-proj/qemu)
 include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include)
 
 add_dependencies(iotracer iotrace_skel)
+add_dependencies(iotracer qemu_uprobe_skel)
 
 # Create a library from iotrace.bpf.c
 add_library(iotrace_bpf OBJECT ${CMAKE_SOURCE_DIR}/iotrace.bpf.c)
@@ -43,6 +45,29 @@ add_custom_command(
 # Add iotrace_bpf to the iotracer executable
 target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
 add_custom_target(iotrace_skel DEPENDS ${CMAKE_SOURCE_DIR}/include/iotrace.skel.h)
+
+include_directories( ${QEMU_PATH}/include ${QEMU_PATH}/build)
+include_directories( /usr/include/x86_64-linux-gnu /usr/include/glib-2.0 /usr/lib/x86_64-linux-gnu/glib-2.0/include)
+
+# compile qemu_uprobe.bpf.c the same process as iotrace.bpf.c
+add_library(qemu_uprobe_bpf OBJECT ${CMAKE_SOURCE_DIR}/qemu_uprobe.bpf.c)
+target_compile_options(qemu_uprobe_bpf PRIVATE  -target bpf -D__TARGET_ARCH_x86)
+set_target_properties(qemu_uprobe_bpf PROPERTIES COMPILE_FLAGS "-xc -I/usr/include/x86_64-linux-gnu")
+add_dependencies(qemu_uprobe_bpf libbpf vmlinux.h qemu_uprobe_bpf_program)
+
+add_custom_target(qemu_uprobe_bpf_program DEPENDS ${CMAKE_SOURCE_DIR}/qemu_uprobe.bpf.c)
+
+# Generate qemu_uprobe.skel.h from qemu_uprobe.bpf.o
+add_custom_command(
+    OUTPUT ${CMAKE_SOURCE_DIR}/include/qemu_uprobe.skel.h
+    COMMAND cp $<TARGET_OBJECTS:qemu_uprobe_bpf> /tmp/qemu_uprobe.bpf.o
+    COMMAND bpftool gen skeleton  /tmp/qemu_uprobe.bpf.o  > ${CMAKE_SOURCE_DIR}/include/qemu_uprobe.skel.h 
+    COMMAND rm /tmp/qemu_uprobe.bpf.o
+    DEPENDS qemu_uprobe_bpf    qemu_uprobe_bpf_program 
+)
+
+add_custom_target(qemu_uprobe_skel DEPENDS ${CMAKE_SOURCE_DIR}/include/qemu_uprobe.skel.h)
+
 
 # Download and build libbpf
 include(ExternalProject)

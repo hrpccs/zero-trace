@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2023 Ruipeng Hong, SYSU */
 
-#include "bpf/bpf.h"
 #include "vmlinux.h"
 #include "bpf/bpf_core_read.h"
 #include "bpf/bpf_helpers.h"
@@ -60,6 +59,7 @@ struct {
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 1 << 20);
+  __uint(pinning, LIBBPF_PIN_BY_NAME);
 } rb SEC(".maps");
 
 struct filter_config filter_config = {
@@ -82,7 +82,7 @@ short nvme_enable = 1;
 short ext4_enable = 1;
 short filemap_enable = 1;
 short iomap_enable = 1;
-short sched_enable = 1;
+short sched_enable = 0;
 short virtio_enable = 1;
 
 
@@ -244,10 +244,31 @@ int BPF_KPROBE_SYSCALL(read, int fd, void *buf, size_t count) {
     return 0;
   }
   // TODO:
+  struct event * e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  if (e) {
+    bpf_debug("submit event iotrace\n");
+    e->event_type = vfs_write_enter;
+    e->info_type = vfs_layer;
+    bpf_ringbuf_submit(e, 0);
+  }
 
-  bpf_printk("read enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  bpf_debug("syscall read enter: fd %d buf %lx count %lu\n", fd, buf, count);
   return 0;
 }
+SEC("kretsyscall/read")
+int BPF_KPROBE_SYSCALL(read_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall read exit\n");
+  return 0;
+}
+
+
 // wirte_enter/exit
 SEC("ksyscall/write")
 int BPF_KPROBE_SYSCALL(write, int fd, void *buf, size_t count) {
@@ -263,7 +284,19 @@ int BPF_KPROBE_SYSCALL(write, int fd, void *buf, size_t count) {
   if (ret) {
     return 0;
   }
-  bpf_printk("write enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  bpf_debug("syscall write enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  return 0;
+}
+SEC("kretsyscall/write")
+int BPF_KPROBE_SYSCALL(write_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall write exit\n");
   return 0;
 }
 // pread64_enter/exit
@@ -284,7 +317,20 @@ int BPF_KPROBE_SYSCALL(pread64, int fd, void *buf, size_t count,
     return 0;
   }
 
-  bpf_printk("pread64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
+  bpf_debug("syscall pread64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
+  return 0;
+}
+SEC("kretsyscall/pread64")
+int BPF_KPROBE_SYSCALL(pread64_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  bpf_debug("syscall pread64 exit\n");
   return 0;
 }
 // pwrite64_enter/exit
@@ -305,7 +351,20 @@ int BPF_KPROBE_SYSCALL(pwrite64, int fd, void *buf, size_t count,
     return 0;
   }
 
-  bpf_printk("pwrite64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
+  bpf_debug("syscall pwrite64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
+  return 0;
+}
+SEC("kretsyscall/pwrite64")
+int BPF_KPROBE_SYSCALL(pwrite64_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  bpf_debug("syscall pwrite64 exit\n");
   return 0;
 }
 // readv_enter/exit
@@ -324,9 +383,22 @@ int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
   if (ret) {
     return 0;
   }
-  bpf_printk("readv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  bpf_debug("syscall readv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
   return 0;
 }
+SEC("kretsyscall/readv")
+int BPF_KPROBE_SYSCALL(readv_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall readv exit\n");
+  return 0;
+}
+
 // writev_enter/exit
 SEC("ksyscall/writev")
 int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
@@ -343,7 +415,19 @@ int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
   if (ret) {
     return 0;
   }
-  bpf_printk("writev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  bpf_debug("syscall writev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  return 0;
+}
+SEC("kretsyscall/writev")
+int BPF_KPROBE_SYSCALL(writev_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall writev exit\n");
   return 0;
 }
 // preadv_enter/exit
@@ -364,7 +448,19 @@ int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen,
   if (ret) {
     return 0;
   }
-  bpf_printk("preadv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  bpf_debug("syscall preadv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  return 0;
+}
+SEC("kretsyscall/preadv")
+int BPF_KPROBE_SYSCALL(preadv_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall preadv exit\n");
   return 0;
 }
 // pwritev_enter/exit
@@ -384,7 +480,19 @@ int BPF_KPROBE_SYSCALL(pwritev, int fd, struct iovec *vec, unsigned long vlen,
   if (ret) {
     return 0;
   }
-  bpf_printk("pwritev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  bpf_debug("syscall pwritev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  return 0;
+}
+SEC("kretsyscall/pwritev")
+int BPF_KPROBE_SYSCALL(pwritev_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall pwritev exit\n");
   return 0;
 }
 
@@ -396,7 +504,6 @@ int BPF_KPROBE_SYSCALL(fsync, int fd) {
   if (!syscall_enable) {
     return 0;
   }
-
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
@@ -406,9 +513,22 @@ int BPF_KPROBE_SYSCALL(fsync, int fd) {
   if (ret) {
     return 0;
   }
-  bpf_printk("fsync enter: fd %d\n", fd);
+  bpf_debug("syscall fsync enter: fd %d\n", fd);
   return 0;
 }
+SEC("kretsyscall/fsync")
+int BPF_KPROBE_SYSCALL(fsync_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  bpf_debug("syscall fsync exit\n");
+  return 0;
+}
+
 // fdatasync
 SEC("ksyscall/fdatasync")
 int BPF_KPROBE_SYSCALL(fdatasync, int fd) {
@@ -425,7 +545,20 @@ int BPF_KPROBE_SYSCALL(fdatasync, int fd) {
   if (ret) {
     return 0;
   }
-  bpf_printk("fdatasync enter: fd %d\n", fd);
+  bpf_debug("syscall fdatasync enter: fd %d\n", fd);
+  return 0;
+}
+SEC("kretsyscall/fdatasync")
+int BPF_KPROBE_SYSCALL(fdatasync_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  bpf_debug("syscall fdatasync exit\n");
   return 0;
 }
 
@@ -445,8 +578,22 @@ int BPF_KPROBE_SYSCALL(sync_file_range, int fd, loff_t offset, loff_t nbytes,
   if (ret) {
     return 0;
   }
-  bpf_printk("sync_file_range enter: fd %d offset %lu nbytes %lu \n", fd,
+  bpf_debug("syscall sync_file_range enter: fd %d offset %lu nbytes %lu \n", fd,
              offset, nbytes);
+  return 0;
+}
+SEC("kretsyscall/sync_file_range")
+int BPF_KPROBE_SYSCALL(sync_file_range_ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  bpf_debug("syscall sync_file_range exit\n");
   return 0;
 }
 
@@ -949,12 +1096,13 @@ long long page_dirty_cnt = 0;
 //  进程级的 page cache 追踪
 //  设备级的 page cache 追踪
 
-/* page cache */
-SEC("tp_btf/mm_filemap_delete_from_page_cache")
+/* page cache */ // 有可能其它进程把这个 page 给删除了，所以这里需要记录
+SEC("tp_btf/mm_filemap_delete_from_page_cache") // 但是对 page 的记录，必须要全局记录
 int handle_tp_filemap_1(struct bpf_raw_tracepoint_args *ctx) {
   if (!filemap_enable) {
     return 0;
   }
+
   struct page *page = (struct page *)(ctx->args[0]);
   // check page_ref_map
   // if exsits, then delete
@@ -962,9 +1110,9 @@ int handle_tp_filemap_1(struct bpf_raw_tracepoint_args *ctx) {
   if (ref == NULL) {
     return 0;
   } else {
-    bpf_debug("page_ref_map: %d\n", *ref);
     bpf_map_delete_elem(&page_ref_map, &page);
   }
+  bpf_debug("delete page %lx page_ref_map: %d\n",page, *ref);
   return 0;
 }
 
@@ -973,6 +1121,7 @@ int handle_tp_filemap_2(struct bpf_raw_tracepoint_args *ctx) {
   if (!filemap_enable) {
     return 0;
   }
+
   struct page *page = (struct page *)(ctx->args[0]);
   struct address_space *mapping = page->mapping;
   struct inode *inode = mapping->host;
@@ -983,14 +1132,18 @@ int handle_tp_filemap_2(struct bpf_raw_tracepoint_args *ctx) {
     int a = 0;
     bpf_map_update_elem(&page_ref_map, &page, &a, BPF_ANY);
   } else {
-    bpf_debug("page_ref_map: %d\n", *ref);
+    bpf_debug("add page %lx page_ref_map: %d\n", page,*ref);
   }
   return 0;
 }
 
-SEC("fentry/mark_page_accessed")
+SEC("fentry/mark_page_accessed")  // 只记录当前追踪的线程对 page 的访问情况
 int BPF_PROG(trace_mark_page_accessed, struct page *page) {
   if (!filemap_enable) {
+    return 0;
+  }
+  pid_t tgid, tid; 
+  if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
   // check page_ref_map
@@ -1000,14 +1153,18 @@ int BPF_PROG(trace_mark_page_accessed, struct page *page) {
     return 0;
   } else {
     (*ref)++;
-     bpf_debug("page_ref_map: %d\n", *ref);
+    bpf_debug("mark_page_accessed page_ref_map: %d\n", *ref);
   }
   return 0;
 }
 
-SEC("tp_btf/writeback_dirty_page")
+SEC("tp_btf/writeback_dirty_page") // 只记录当前追踪的线程对 page 的写 dirty 情况（不算系统工作线程写回的）
 int handle_tp_filemap_3(struct bpf_raw_tracepoint_args *ctx) {
   if (!filemap_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
   struct page *page = (struct page *)(ctx->args[0]);
@@ -1019,6 +1176,7 @@ int handle_tp_filemap_3(struct bpf_raw_tracepoint_args *ctx) {
   } else {
     __sync_fetch_and_add(&page_ref_map_cnt, *ref);
     __sync_fetch_and_add(&page_dirty_cnt, 1);
+    bpf_debug("writeback_dirty_page page_ref_map: %d\n", *ref);
   }
   return 0;
 }
@@ -1107,7 +1265,8 @@ int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
   if (ino_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("ino_ref_map: %d\n", *ino_ref);
+    // bpf_debug("ino_ref_map: %d\n", *ino_ref);
+    bpf_debug("block_bio_queue target i_ino: %ld\n", i_ino);
   }
 
   // add to bio_ref_map
@@ -1115,9 +1274,9 @@ int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
   if (bio_ref == NULL) {
     int a = 0;
     bpf_map_update_elem(&bio_ref_map, &bio, &a, BPF_ANY);
-    bpf_debug("curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, 1));
+    bpf_debug("block_bio_queue bio curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, 1));
   } else {
-    bpf_debug("bio_queue already in bio_ref_map\n");
+    bpf_debug("block_bio_queue bio %lx already in bio_ref_map\n", bio);
   }
    // 近似的计算 bio 对应文件逻辑地址的大致范围（认为 bio 的 bi_vec 是顺序递增的）
   // 用于和 vfs 的请求进行匹配
@@ -1133,7 +1292,7 @@ int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
 	loff_t end_offset = (last_page_index << 12) + last_bv.bv_offset + last_bv.bv_len;
 	bpf_printk("block_bio_queue target  bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
 		   nr_sector);
-	bpf_printk("block_bio_queue target i_ino: %ld start_offset: %ld end_offset: %ld\n", i_ino,
+	bpf_printk("                       i_ino: %ld start_offset: %ld end_offset: %ld\n", i_ino,
 		   start_offset, end_offset);
 	return 0;
 }
@@ -1176,16 +1335,16 @@ int BPF_PROG(trace_rq_qos_track, struct rq_qos *q, struct request *rq, struct bi
   if (bio_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("bio_ref_map: %d\n", *bio_ref);
   }
   // add to request_ref_map
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     int a = 0;
     bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+    bpf_debug("rq_qos_track bio: %lx rq:%lx\n", bio,rq);
     bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
   } else {
-    bpf_debug("rq_merge:request already in request_ref_map\n");
+    bpf_debug("rq_qos_track:request %lx already in request_ref_map\n",rq);
   }
 	// bpf_printk("rq_qos_track target bio: %lx rq: %lx\n", bio, rq);
 	return 0;
@@ -1203,16 +1362,16 @@ int BPF_PROG(trace_rq_qos_merge, struct rq_qos *q, struct request *rq, struct bi
   if (bio_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("bio_ref_map: %d\n", *bio_ref);
   }
   // add to request_ref_map
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     int a = 0;
     bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+    bpf_debug("rq_qos_merge bio: %lx rq: %lx\n", bio,rq);
     bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
   } else {
-    bpf_debug("rq_merge:request already in request_ref_map\n");
+    bpf_debug("rq_qos_merge:request %lx already in request_ref_map\n", rq);
   }
 	// bpf_printk("rq_qos_merge target bio: %lx rq: %lx\n", bio, rq);
 	return 0;
@@ -1253,9 +1412,9 @@ int BPF_PROG(trace_rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
     bpf_map_delete_elem(&bio_ref_map, &bio);
     // active_bio_cnt--;
     bpf_debug("curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, -1));
+	  bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
   }
 
-	bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
 	return 0;
 }
 
@@ -1271,9 +1430,8 @@ int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
   if (bio_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("bio_ref_map: %d\n", *bio_ref);
+	  bpf_printk("rq_qos_throttle target  bio: %lx\n", bio);
   }
-	bpf_printk("rq_qos_throttle target  bio: %lx\n", bio);
 	return 0;
 }
 
@@ -1301,12 +1459,11 @@ int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
+    // bpf_debug("request_ref_map: %d\n", *request_ref);
   }
-
 	long nr_sector = rq->__data_len;
 	sector_t sector = rq->__sector;
-	bpf_printk(" rq_insert target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
+	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_sector);
 	return 0;
 }
 
@@ -1358,7 +1515,7 @@ int BPF_PROG(trace_rq_qos_done, struct rq_qos *q, struct request *rq)
   } else {
     bpf_map_delete_elem(&request_ref_map, &rq);
     // active_rq_cnt--;
-    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, -1));
+    bpf_debug("rq_qos_done: curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, -1));
   }
 
 	bpf_printk("rq_qos_done target rq: %lx\n", rq);
@@ -1380,10 +1537,9 @@ int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
+	  bpf_printk("rq_qos_issue target  rq: %lx\n", rq);
   }
 
-	bpf_printk("rq_qos_issue target  rq: %lx\n", rq);
 	return 0;
 }
 
@@ -1400,9 +1556,8 @@ int BPF_PROG(trace_rq_qos_requeue, struct rq_qos *q, struct request *rq)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
-  }
 	bpf_printk("rq_qos_requeue target  rq: %lx\n", rq);
+  }
 	return 0;
 }
 
@@ -1422,7 +1577,6 @@ int handle_tp_nvme_1(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	struct nvme_command *cmd = (struct nvme_command *)(ctx->args[1]);
 
@@ -1444,7 +1598,6 @@ int handle_tp_nvme_2(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	bpf_printk("nvme_complete_rq rq: %llx\n", rq);
 	return 0;
@@ -1463,7 +1616,6 @@ int handle_tp_nvme_4(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	bpf_printk("nvme_sq rq: %llx\n", rq);
 	return 0;
@@ -1484,7 +1636,6 @@ int handle_tp_scsi_1(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 
 	bpf_printk("scsi_dispatch_cmd_start rq: %lx\n", (unsigned long)rq);
@@ -1505,7 +1656,6 @@ int handle_tp_scsi_2(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	bpf_printk("scsi_dispatch_cmd_error rq: %lx\n", (unsigned long)rq);
 	return 0;
@@ -1525,7 +1675,6 @@ int handle_tp_scsi_3(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	bpf_printk("scsi_dispatch_cmd_done rq: %lx\n", (unsigned long)rq);
 
@@ -1546,7 +1695,6 @@ int handle_tp_scsi_4(struct bpf_raw_tracepoint_args *ctx)
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	bpf_printk("scsi_dispatch_cmd_timeout rq: %lx\n", (unsigned long)rq);
 	return 0;
@@ -1571,7 +1719,6 @@ int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_qu
   if (request_ref == NULL) {
     return 0;
   } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
   }
 	loff_t offset = rq->__sector << 9;
 	unsigned long nr_bytes = rq->__data_len << 9;
@@ -1581,3 +1728,40 @@ int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_qu
 }
 
 /* virtio-pci */
+
+
+// #include <qemu/osdep.h>
+// #include "hw/virtio/virtio-blk.h"
+// #include "block/thread-pool.h"
+
+// /* qemu user space */
+// #define QEMU_EXE "/home/hrpccs/workspace/qemu-proj/qemu/build/x86_64-softmmu/qemu-system-x86_64"
+// #define UPROBE_QEMU_HOOK(hook_point_name) "uprobe/" QEMU_EXE ":"  hook_point_name
+
+
+// //virtio_blk_handle_request
+// SEC(UPROBE_QEMU_HOOK("virtio_blk_handle_request"))
+// int BPF_KPROBE(uprobe_virtio_blk_handle_request, VirtIOBlockReq *req, MultiReqBuffer *mrb)
+// { 
+// 	bpf_printk("virtio_blk_handle_request %lx %lx\n", req, mrb);
+// 	// VirtIODevice* vdev = (VirtIODevice*)BPF_CORE_READ_USER(req,dev);
+// 	VirtIOBlock *vblk;
+// 	VirtIODevice *vdev;
+// 	VirtQueue *vq;
+// 	int queue_index = 0;
+// 	long long offset = 0;
+// 	bpf_probe_read_user(&vq, sizeof(VirtQueue *), &(req->vq));
+// 	// long long nr_bytes = 0;
+// 	bpf_probe_read_user(&offset, sizeof(long long), &(req->sector_num));
+// 	// bpf_probe_read_user(&nr_bytes,sizeof(long long),&(req->qiov.size));
+// 	bpf_probe_read_user(&vblk, sizeof(VirtIOBlock *), &(req->dev));
+// 	vdev = &(vblk->parent_obj);
+// 	int device_id = 0;
+// 	bpf_probe_read_user(&device_id, sizeof(int), &(vdev->device_id));
+// 	bpf_printk("dev_id: %lx, queue_index: %lx,offset: %llx\n", device_id,queue_index, offset << 9);
+// 	return 0;
+// }
+//virtio_blk_req_complete
+// SEC(UPROBE_QEMU_HOOK(virtio_blk_req_complete))
+
+
