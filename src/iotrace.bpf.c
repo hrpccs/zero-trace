@@ -1,24 +1,30 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2023 Ruipeng Hong, SYSU */
 
+#include "bpf/bpf.h"
+#include "vmlinux.h"
 #include "bpf/bpf_core_read.h"
 #include "bpf/bpf_helpers.h"
 #include "bpf/bpf_tracing.h"
 #include "event_defs.h"
 #include "hook_point.h"
 #include "system_macro.h"
-#include "vmlinux.h"
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
+#define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
 #define bpf_debug(fmt, ...)
 #endif
 
+struct request *cmd_to_rq(void *cmd)
+{
+	return (void *)cmd - (sizeof(struct request));
+}
 // HINT:
 // 设置进程过滤是必须的！
 // 这是出于现在大多数应用都是多线程的，如果不设置，会导致大量的无用的数据
@@ -30,40 +36,33 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 // assist to filter some event in block layer
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, ino_t);
+  __type(key, long);
   __type(value, int);
+  __uint(max_entries, 1 << 10);
 } inode_ref_map SEC(".maps");
 
 // a map to store how many processes are referring to a file
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __type(key, int);
-  __type(value, ino_t);
+  __type(value, long);
+  __uint(max_entries, 1 << 10);
 } fd_ref_map SEC(".maps");
 
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __type(key, int);
   __type(value, int);
+  __uint(max_entries, 1 << 10);
 } fd_filted_map SEC(".maps");
-
 
 
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 1 << 20);
 } rb SEC(".maps");
 
-struct filter_config {
-  unsigned int tgid;
-  unsigned int tid;
-  unsigned long long inode;
-  unsigned long long directory_inode;
-  unsigned long dev;
-  u8 filter_by_command;
-  char command[MAX_COMM_LEN];
-  unsigned int command_len;
-  unsigned long long cgroup_id;
-} filter_config = {
+struct filter_config filter_config = {
     .tgid = 0,
     .tid = 0,
     .inode = 0,
@@ -74,17 +73,18 @@ struct filter_config {
     .cgroup_id = 0,
 };
 
-u8 qemu_enable = 1;    // 必需加上至少进程级的过滤
-u8 syscall_enable = 1; // 必需加上至少进程级的过滤
-u8 vfs_enable = 1;     // 必需加上至少进程级的过滤
-u8 block_enable = 1;
-u8 scsi_enable = 1;
-u8 nvme_enable = 1;
-u8 ext4_enable = 1;
-u8 filemap_enable = 1;
-u8 iomap_enable = 1;
-u8 sched_enable = 1;
-u8 virtio_enable = 1;
+short qemu_enable = 1;    // 必需加上至少进程级的过滤
+short syscall_enable = 1; // 必需加上至少进程级的过滤
+short vfs_enable = 1;     // 必需加上至少进程级的过滤
+short block_enable = 1;
+short scsi_enable = 1;
+short nvme_enable = 1;
+short ext4_enable = 1;
+short filemap_enable = 1;
+short iomap_enable = 1;
+short sched_enable = 1;
+short virtio_enable = 1;
+
 
 long long dropped __attribute__((aligned(128))) = 0;
 
@@ -128,7 +128,7 @@ static inline void set_fs_info(struct event *task_info, ino_t inode,
   task_info->vfs_layer_info.dir_inode = dir_inode;
 }
 
-int inline pid_filter(pid_t tgid, pid_t tid) {
+static int inline pid_filter(pid_t tgid, pid_t tid) {
   // assert(filter_config.tgid != 0 || filter_config.tid != 0); !
   if (filter_config.tgid != tgid) {
     return 1;
@@ -139,14 +139,14 @@ int inline pid_filter(pid_t tgid, pid_t tid) {
   return 0;
 }
 
-int inline get_and_filter_pid(pid_t *tgid, pid_t *tid) {
+static int inline get_and_filter_pid(pid_t *tgid, pid_t *tid) {
   u64 id = bpf_get_current_pid_tgid();
   *tgid = id >> 32;
   *tid = id & 0xffffffff;
   return pid_filter(*tgid, *tid);
 }
 
-int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
+static int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
                                 ino_t *inode, dev_t *devp, ino_t *dir_inodep) {
   *inode = BPF_CORE_READ(iinode, i_ino);
   if (filter_config.inode != 0 && filter_config.inode != *inode) {
@@ -176,7 +176,7 @@ int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
 // 由于已经通过 pid 过滤了，所以这种情况出现的请求对应的文件描述符可能不会太多
 // 所以通过一个 map 来记录一下，作为短路判断
 // FIXME: 通过追踪文件描述符的开启和回收来维护这个 map
-int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *inodep,
+static int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *inodep,
                                                         dev_t *devp,
                                                         ino_t *dir_inodep) {
   int *fd_ref = bpf_map_lookup_elem(&fd_ref_map, &fd);
@@ -452,7 +452,7 @@ int BPF_KPROBE_SYSCALL(sync_file_range, int fd, loff_t offset, loff_t nbytes,
 
 /* vfs layer */
 
-int inline vfs_filter_inode(ino_t inode) {
+static int inline vfs_filter_inode(ino_t inode) {
   if (filter_config.inode != 0 && filter_config.inode != inode) {
     return 1;
   }
@@ -490,8 +490,8 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
 
-  // bpf_printk("do_iter_read enter:	ino %lu offset %lu len %lu\n", ino,
-  // offset, nr_bytes);
+  bpf_printk("do_iter_read enter:	ino %lu offset %lu len %lu\n", ino,
+  offset, nr_bytes);
   return 0;
 }
 SEC("fexit/do_iter_read")
@@ -508,7 +508,7 @@ int BPF_PROG(trace_do_iter_read_exit, struct file *file) {
     return 0;
   }
 
-  // bpf_printk("do_iter_read exit:	ino %lu\n", ino);
+  bpf_printk("do_iter_read exit:	ino %lu\n", ino);
   return 0;
 }
 // do_iter_write
@@ -724,6 +724,8 @@ int BPF_PROG(trace_vfs_fsync_range, struct file *file, loff_t start, loff_t end,
     return 0;
   }
 
+  bpf_printk("vfs_fsync_range enter:	ino %lu start %lu end %lu\n", ino, start,
+             end);
   return 0;
 }
 
@@ -935,10 +937,11 @@ int handle_tp_sched_1(struct bpf_raw_tracepoint_args *ctx) {
 // a map to keep track of existing pages related to the inodes tracked
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, struct page *);
+  __type(key, void*);
   __type(value, int);
-  // __uint(max_entries, 10240);
+  __uint(max_entries, 1<<10);
 } page_ref_map SEC(".maps");
+
 long long page_ref_map_cnt = 0;
 long long page_dirty_cnt = 0;
 
@@ -996,7 +999,8 @@ int BPF_PROG(trace_mark_page_accessed, struct page *page) {
   if (ref == NULL) {
     return 0;
   } else {
-    (*ref)++ bpf_debug("page_ref_map: %d\n", *ref);
+    (*ref)++;
+     bpf_debug("page_ref_map: %d\n", *ref);
   }
   return 0;
 }
@@ -1056,8 +1060,9 @@ static inline void set_common_bio_info(struct event *task_info, struct bio *bio,
 // if the bio is in the map, it means there are some processes are referring
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, struct bio *);
+  __type(key, void *);
   __type(value, int);
+  __uint(max_entries, 1<<10);
 } bio_ref_map SEC(".maps");
 
 // request refference map
@@ -1065,10 +1070,14 @@ struct {
 // if the request is in the map, it means there are some processes are referring
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, struct request *);
+  __type(key, void *);
   __type(value, int);
+  __uint(max_entries, 1<<10);
 } request_ref_map SEC(".maps");
 //TODO: 进程级别的 io 活动分析
+
+long long active_bio_cnt = 0;
+long long active_rq_cnt = 0;
 
 // SEC("tp_btf/block_split") // 不影响主 bio，应该不用管
 // int handle_tp3(struct bpf_raw_tracepoint_args *ctx)
@@ -1080,6 +1089,54 @@ struct {
 // 		   new_sector);
 // 	return 0;
 // }
+
+SEC("tp_btf/block_bio_queue") // 开始追踪一个 bio
+int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
+{
+  if(!block_enable){
+    return 0;
+  }
+	struct bio *bio = (struct bio *)(ctx->args[0]);
+	struct bio_vec *first_bv = bio->bi_io_vec;
+	struct page *first_page = first_bv->bv_page;
+	struct inode *inode = first_page->mapping->host;
+	ino_t i_ino = inode->i_ino;
+  // check if inode is in the ino_ref_map
+  // if not, return
+  int *ino_ref = bpf_map_lookup_elem(&inode_ref_map, &i_ino);
+  if (ino_ref == NULL) {
+    return 0;
+  } else {
+    bpf_debug("ino_ref_map: %d\n", *ino_ref);
+  }
+
+  // add to bio_ref_map
+  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
+  if (bio_ref == NULL) {
+    int a = 0;
+    bpf_map_update_elem(&bio_ref_map, &bio, &a, BPF_ANY);
+    bpf_debug("curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, 1));
+  } else {
+    bpf_debug("bio_queue already in bio_ref_map\n");
+  }
+   // 近似的计算 bio 对应文件逻辑地址的大致范围（认为 bio 的 bi_vec 是顺序递增的）
+  // 用于和 vfs 的请求进行匹配
+
+	sector_t sector = bio->bi_iter.bi_sector;
+	size_t nr_sector = bio->bi_iter.bi_size >> 9;
+	int last_index = (bio->bi_vcnt - 1) & (512 - 1);
+	struct bio_vec last_bv;
+	bpf_core_read(&last_bv, sizeof(struct bio_vec), first_bv + last_index);
+	int last_page_index = BPF_CORE_READ(last_bv.bv_page, index);
+	// struct bio_vec *last_bv = &bio->bi_io_vec[last_index];
+	loff_t start_offset = (first_page->index << 12) + first_bv->bv_offset;
+	loff_t end_offset = (last_page_index << 12) + last_bv.bv_offset + last_bv.bv_len;
+	bpf_printk("block_bio_queue target  bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
+		   nr_sector);
+	bpf_printk("block_bio_queue target i_ino: %ld start_offset: %ld end_offset: %ld\n", i_ino,
+		   start_offset, end_offset);
+	return 0;
+}
 
 // remap bio/rq 不管
 SEC("tp_btf/block_bio_bounce") // 可以很好反映性能的事件，需要额外的数据拷贝和内存申请
@@ -1106,57 +1163,9 @@ int handle_tp6(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-SEC("tp_btf/block_bio_queue") // 开始追踪一个 bio
-int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
-{
-  if(!block_enable){
-    return 0;
-  }
-	struct bio *bio = (struct bio *)(ctx->args[0]);
-	struct bio_vec *first_bv = bio->bi_io_vec;
-	struct page *first_page = first_bv->bv_page;
-	struct inode *inode = first_page->mapping->host;
-	ino_t i_ino = inode->i_ino;
-  // check if inode is in the ino_ref_map
-  // if not, return
-  int *ino_ref = bpf_map_lookup_elem(&ino_ref_map, &i_ino);
-  if (ino_ref == NULL) {
-    return 0;
-  } else {
-    bpf_debug("ino_ref_map: %d\n", *ino_ref);
-  }
-
-  // add to bio_ref_map
-  int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
-  if (bio_ref == NULL) {
-    int a = 0;
-    bpf_map_update_elem(&bio_ref_map, &bio, &a, BPF_ANY);
-  } else {
-    bpf_debug("bio_queue already in bio_ref_map\n");
-  }
-
-
-  // 近似的计算 bio 对应文件逻辑地址的大致范围（认为 bio 的 bi_vec 是顺序递增的）
-  // 用于和 vfs 的请求进行匹配
-
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	int last_index = (bio->bi_vcnt - 1) & (512 - 1);
-	struct bio_vec last_bv;
-	bpf_core_read(&last_bv, sizeof(struct bio_vec), first_bv + last_index);
-	int last_page_index = BPF_CORE_READ(last_bv.bv_page, index);
-	// struct bio_vec *last_bv = &bio->bi_io_vec[last_index];
-	loff_t start_offset = (first_page->index << 12) + first_bv->bv_offset;
-	loff_t end_offset = (last_page_index << 12) + last_bv.bv_offset + last_bv.bv_len;
-	bpf_printk("block_bio_queue target  bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
-	bpf_printk("block_bio_queue target i_ino: %ld start_offset: %ld end_offset: %ld\n", i_ino,
-		   start_offset, end_offset);
-	return 0;
-}
 
 SEC("fentry/__rq_qos_track")
-int BPF_PROG(rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio)
+int BPF_PROG(trace_rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio)
 {
   if(!block_enable){
     return 0;
@@ -1174,6 +1183,7 @@ int BPF_PROG(rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio
   if (request_ref == NULL) {
     int a = 0;
     bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
   } else {
     bpf_debug("rq_merge:request already in request_ref_map\n");
   }
@@ -1182,7 +1192,7 @@ int BPF_PROG(rq_qos_track, struct rq_qos *q, struct request *rq, struct bio *bio
 }
 
 SEC("fentry/__rq_qos_merge") // 代替 block_bio_merge, 用来建立 bio 和 request 的关系
-int BPF_PROG(rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio)
+int BPF_PROG(trace_rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio)
 {
   if(!block_enable){
     return 0;
@@ -1200,6 +1210,7 @@ int BPF_PROG(rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio
   if (request_ref == NULL) {
     int a = 0;
     bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
+    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
   } else {
     bpf_debug("rq_merge:request already in request_ref_map\n");
   }
@@ -1229,7 +1240,7 @@ int BPF_PROG(rq_qos_merge, struct rq_qos *q, struct request *rq, struct bio *bio
 // 	return 0;
 // }
 SEC("fentry/__rq_qos_done_bio") // 代替 block_bio_complete, 用来删除 bio 的引用
-int BPF_PROG(rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
+int BPF_PROG(trace_rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
 {
   if(!block_enable){
     return 0;
@@ -1240,6 +1251,8 @@ int BPF_PROG(rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
     return 0;
   } else {
     bpf_map_delete_elem(&bio_ref_map, &bio);
+    // active_bio_cnt--;
+    bpf_debug("curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, -1));
   }
 
 	bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
@@ -1277,7 +1290,7 @@ int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
 
 SEC("tp_btf/block_rq_insert")
 int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
-{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+{ 
   if(!block_enable){
     return 0;
   }
@@ -1297,43 +1310,43 @@ int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
-SEC("tp_btf/block_rq_issue")
-int handle_tp(struct bpf_raw_tracepoint_args *ctx)
-{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
-  if(!block_enable){
-    return 0;
-  }
-  // check if request is in request_ref_map
-  // if not, return
-	struct request *rq = (struct request *)(ctx->args[0]);
-  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
-  if (request_ref == NULL) {
-    return 0;
-  } else {
-    bpf_debug("request_ref_map: %d\n", *request_ref);
-  }
-	long nr_sector = rq->__data_len;
-	sector_t sector = rq->__sector;
-	bpf_printk(" rq_issue target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
-	return 0;
-}
+// SEC("tp_btf/block_rq_issue")
+// int handle_tp(struct bpf_raw_tracepoint_args *ctx)
+// { // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+//   if(!block_enable){
+//     return 0;
+//   }
+//   // check if request is in request_ref_map
+//   // if not, return
+// 	struct request *rq = (struct request *)(ctx->args[0]);
+//   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+//   if (request_ref == NULL) {
+//     return 0;
+//   } else {
+//     bpf_debug("request_ref_map: %d\n", *request_ref);
+//   }
+// 	long nr_sector = rq->__data_len;
+// 	sector_t sector = rq->__sector;
+// 	bpf_printk(" rq_issue target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
+// 	return 0;
+// }
 
-SEC("tp_btf/block_rq_complete")
-int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
-{
-	struct request *rq = (struct request *)(ctx->args[0]);
-	// dev_t dev = rq->part->bd_dev;
-	// tracepoint 里面是 __entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
-	sector_t sector = rq->__sector;
-	long nr_sector = rq->__data_len;
-	bpf_printk(" rq_complete target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
-	return 0;
-}
+// SEC("tp_btf/block_rq_complete")
+// int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
+// {
+// 	struct request *rq = (struct request *)(ctx->args[0]);
+// 	// dev_t dev = rq->part->bd_dev;
+// 	// tracepoint 里面是 __entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
+// 	sector_t sector = rq->__sector;
+// 	long nr_sector = rq->__data_len;
+// 	bpf_printk(" rq_complete target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
+// 	return 0;
+// }
 
 
 
 SEC("fentry/__rq_qos_done") // 用来代替 block_rq_complete, 用来删除 request 的引用
-int BPF_PROG(rq_qos_done, struct rq_qos *q, struct request *rq)
+int BPF_PROG(trace_rq_qos_done, struct rq_qos *q, struct request *rq)
 {
   if(!block_enable){
     return 0;
@@ -1344,8 +1357,9 @@ int BPF_PROG(rq_qos_done, struct rq_qos *q, struct request *rq)
     return 0;
   } else {
     bpf_map_delete_elem(&request_ref_map, &rq);
+    // active_rq_cnt--;
+    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, -1));
   }
-
 
 	bpf_printk("rq_qos_done target rq: %lx\n", rq);
 	return 0;
@@ -1355,7 +1369,7 @@ int BPF_PROG(rq_qos_done, struct rq_qos *q, struct request *rq)
 
 //rq_qos_issue
 SEC("fentry/__rq_qos_issue")
-int BPF_PROG(rq_qos_issue, struct rq_qos *q, struct request *rq)
+int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
 {
   if(!block_enable){
     return 0;
@@ -1375,7 +1389,7 @@ int BPF_PROG(rq_qos_issue, struct rq_qos *q, struct request *rq)
 
 //rq_qos_requeue
 SEC("fentry/__rq_qos_requeue")
-int BPF_PROG(rq_qos_requeue, struct rq_qos *q, struct request *rq)
+int BPF_PROG(trace_rq_qos_requeue, struct rq_qos *q, struct request *rq)
 {
   if(!block_enable){
     return 0;
@@ -1561,6 +1575,7 @@ int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_qu
   }
 	loff_t offset = rq->__sector << 9;
 	unsigned long nr_bytes = rq->__data_len << 9;
+  dev_t dev = rq->rq_disk->major << 20 | rq->rq_disk->first_minor;
 	bpf_printk("virtio_queue_rq target rq: %lx offset %lx bytes %lx\n", rq, offset, nr_bytes);
 	return 0;
 }

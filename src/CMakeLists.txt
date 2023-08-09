@@ -54,7 +54,7 @@ set(LIBBPF_MAKE     cd ${LIBBPF_ROOT}/src && make  -j8 BUILD_STATIC_ONLY=1)
 set(LIBBPF_INSTALL cd ${LIBBPF_ROOT}/src && make PREFIX=${CMAKE_BINARY_DIR} install)
 ExternalProject_Add(libbpf
     GIT_REPOSITORY https://github.com/libbpf/libbpf.git
-    GIT_TAG v0.7.0
+    GIT_TAG v1.2.0
     PREFIX                  ${CMAKE_BINARY_DIR}
     CONFIGURE_COMMAND ""
     BUILD_COMMAND  ${LIBBPF_MAKE}

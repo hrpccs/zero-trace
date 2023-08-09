@@ -100,12 +100,12 @@ void parse_args(int argc, char **argv) {
     switch (opt) {
     case 'p':
       pid = atoi(optarg);
-      skel->bss->target_tgid = pid;
+      skel->bss->filter_config.tgid = pid;
       fprintf(output_file, "pid: %d\n", pid);
       break;
     case 't':
       tid = atoi(optarg);
-      skel->bss->target_tid = tid;
+      skel->bss->filter_config.tid = tid;
       break;
     case 'd':
       dev = optarg;
@@ -115,11 +115,11 @@ void parse_args(int argc, char **argv) {
       break;
     case 'f':
       file = atoi(optarg);
-      skel->bss->target_file_inode = file;
+      skel->bss->filter_config.inode = file;
       break;
     case 'D':
       directory = atoi(optarg);
-      skel->bss->target_direrctory_inode = directory;
+      skel->bss->filter_config.directory_inode = directory;
       break;
     case 'o':
       output = optarg;
@@ -129,8 +129,9 @@ void parse_args(int argc, char **argv) {
       break;
     case 'n':
       command = std::string(optarg);
-      std::strcpy(skel->bss->command, command.c_str());
-      skel->bss->command_len = command.length();
+      std::strcpy(skel->bss->filter_config.command, command.c_str());
+      skel->bss->filter_config.command_len = command.length();
+      skel->bss->filter_config.filter_by_command = 1;
       break;
     case 'T':
       time_duration = atoi(optarg);
@@ -171,7 +172,7 @@ void parse_args(int argc, char **argv) {
       exit(EXIT_FAILURE);
     }
     // set the dev_t in the bpf program
-    skel->bss->target_dev = st.st_rdev;
+    skel->bss->filter_config.dev = st.st_rdev;
   }
 
   if (cgroup != NULL) {

@@ -77,3 +77,15 @@ struct event {
     } rq_plug_info; // 对于 request 的 plug 和 unplug 事件
   };
 };
+
+struct filter_config {
+  unsigned int tgid;
+  unsigned int tid;
+  unsigned long long inode;
+  unsigned long long directory_inode;
+  unsigned long dev;
+  short filter_by_command;
+  char command[MAX_COMM_LEN];
+  unsigned int command_len;
+  unsigned long long cgroup_id;
+};
