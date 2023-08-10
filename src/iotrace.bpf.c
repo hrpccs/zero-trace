@@ -74,17 +74,17 @@ volatile struct filter_config filter_config = {
     .cgroup_id = 0,
 };
 
-volatile short qemu_enable = 0;    // 必需加上至少进程级的过滤
-volatile short syscall_enable = 1; // 必需加上至少进程级的过滤
-volatile short vfs_enable = 1;     // 必需加上至少进程级的过滤
-volatile short block_enable = 1;
-volatile short scsi_enable = 1;
-volatile short nvme_enable = 1;
-volatile short ext4_enable = 1;
-volatile short filemap_enable = 1;
-volatile short iomap_enable = 1;
-volatile short sched_enable = 0;
-volatile short virtio_enable = 1;
+volatile short qemu_enable;    // 必需加上至少进程级的过滤
+volatile short syscall_enable; // 必需加上至少进程级的过滤
+volatile short vfs_enable;     // 必需加上至少进程级的过滤
+volatile short block_enable;
+volatile short scsi_enable;
+volatile short nvme_enable;
+volatile short ext4_enable;
+volatile short filemap_enable;
+volatile short iomap_enable;
+volatile short sched_enable;
+volatile short virtio_enable;
 
 
 long long dropped __attribute__((aligned(128))) = 0;

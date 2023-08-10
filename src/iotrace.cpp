@@ -68,6 +68,17 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
     long long rqaddr = e->qemu_layer_info.virt_rq_addr;
     // fprintf(stdout,"event type: %s, trigger type: %d, offset: %lld, nr_bytes: %lld, rqaddr: %lld\n", kernel_hook_type_str[type], trigger, offset, nr_bytes, rqaddr);
     fprintf(stdout,"event type: %s, trigger type: %d, offset: %lld, nr_bytes: %lld, rqaddr: %lld, tid: %d, async_task_id: %d\n", kernel_hook_type_str[type], trigger, offset, nr_bytes, rqaddr, tid, async_task_id);
+  } else if(e->info_type == syscall_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int tid = e->syscall_layer_info.tid;
+    int tgid = e->syscall_layer_info.tgid;
+    int fd = e->syscall_layer_info.fd;
+    int inode = e->syscall_layer_info.inode;
+    int dir_inode = e->syscall_layer_info.dir_inode;
+    int dev = e->syscall_layer_info.dev;
+
+    fprintf(stdout,"event type: %s, trigger type: %d, tid: %d, tgid: %d, fd: %d, inode: %d, dir_inode: %d, dev: %d\n", kernel_hook_type_str[type], trigger, tid, tgid, fd, inode, dir_inode, dev);
   }
   // const char *event_type_str = kernel_hook_type_str[e->event_type];
   // const char *layer_type_str = info_type_str[e->info_type];
@@ -103,7 +114,20 @@ void parse_args(int argc, char **argv) {
   printf("Parsing arguments\n");
   output_file = stdout;
 
-  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w:n:T:h")) != -1) {
+  skel->bss->qemu_enable = 1;
+  skel->bss->syscall_enable = 1;
+  skel->bss->vfs_enable = 1;
+  skel->bss->block_enable = 1;
+  skel->bss->scsi_enable = 1;
+  skel->bss->nvme_enable = 1;
+  skel->bss->ext4_enable = 0;
+  skel->bss->filemap_enable = 0;
+  skel->bss->iomap_enable = 1;
+  skel->bss->sched_enable = 0;
+  skel->bss->virtio_enable = 0;
+
+
+  while ((opt = getopt(argc, argv, "p:t:d:c:f:D:o:w:n:T:h:q")) != -1) {
     switch (opt) {
     case 'p':
       pid = atoi(optarg);
@@ -142,6 +166,9 @@ void parse_args(int argc, char **argv) {
       break;
     case 'T':
       time_duration = atoi(optarg);
+      break;
+    case 'q':
+      skel->bss->qemu_enable = 1;
       break;
     default:
       fprintf(stderr,
