@@ -57,31 +57,40 @@ struct event {
       unsigned long offset;
       unsigned long bytes;
     } fs_layer_info;
+
     struct {
-      unsigned long long bio;
-      unsigned long long parent_bio;
-      unsigned long dev;
-      unsigned short bvec_idx_start;
-      unsigned short bvec_idx_end;
-      unsigned long bio_op;
-    } bio_info; // 对于 bio 的 split，queue，end 事件。
+      int prev_tid;
+      int next_tid;
+    } sched_layer_info;
     struct {
-      unsigned long dev;
-      unsigned long long rq;
-      unsigned long long request_queue;
-    } rq_info; // 对于单一 request 的事件，如创建、释放
+      unsigned int  bio_id;
+      unsigned int rq_id;
+      int tid;
+      int tgid;
+      unsigned long long approximate_filemap_start_offset;
+      unsigned int approximate_filemap_len;
+    } block_layer_info; // 对于 bio 的 split，queue，end 事件。
+
     struct {
-      unsigned long dev;
-      unsigned long long bio;
-      unsigned long long rq;
-      unsigned long long request_queue;
-    } bio_rq_association_info; // 对于 bio 和 request 关联的事件，add, remove,
-                               // merge
+      unsigned long long rq_id;
+      unsigned long sector;
+      unsigned int nr_bytes;
+      unsigned int dev;
+    } nvme_layer_info;
+
     struct {
-      unsigned long dev;
-      unsigned long long request_queue;
-      unsigned short plug_or_unplug;
-    } rq_plug_info; // 对于 request 的 plug 和 unplug 事件
+      unsigned long long rq_id;
+      unsigned long sector;
+      unsigned int nr_bytes;
+      unsigned int dev;
+    } scsi_layer_info;
+
+    struct {
+      unsigned long long rq_id;
+      unsigned long long sector;
+      unsigned long long nr_bytes;
+      unsigned int dev;
+    } virtio_layer_info;
   };
 };
 

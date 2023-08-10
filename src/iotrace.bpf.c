@@ -13,7 +13,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
-#define DEBUG 1
+// #define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -80,7 +80,6 @@ volatile short vfs_enable;     // 必需加上至少进程级的过滤
 volatile short block_enable;
 volatile short scsi_enable;
 volatile short nvme_enable;
-volatile short ext4_enable;
 volatile short filemap_enable;
 volatile short iomap_enable;
 volatile short sched_enable;
@@ -111,7 +110,7 @@ static inline int task_comm_dropable(char *comm) {
 
 static int inline pid_filter(pid_t tgid, pid_t tid) {
   // assert(filter_config.tgid != 0 || filter_config.tid != 0); !
-  if (filter_config.tgid != tgid) {
+  if (filter_config.tgid !=0 && filter_config.tgid != tgid) {
     return 1;
   }
   if (filter_config.tid != 0 && filter_config.tid != tid) {
@@ -424,7 +423,6 @@ int BPF_KRETPROBE(readv_ret,int ret) {
   if (!syscall_enable) {
     return 0;
   }
-
   if(qemu_enable){
     bpf_debug("qemu untracked readv exit\n");
     return 0;
@@ -1086,7 +1084,6 @@ int BPF_KRETPROBE(sync_file_range_ret) {
 }
 
 /* vfs layer */
-
 static int inline vfs_filter_inode(ino_t inode) {
   if (filter_config.inode != 0 && filter_config.inode != inode) {
     return 1;
@@ -1100,9 +1097,21 @@ static int inline vfs_filter_inode(ino_t inode) {
   return 0;
 }
 
-// 对于 vfs 层的挂载点，由于是完全同步的，所以直接通过 pid 过滤即可
-// 传回用户态时，如果前置 syscall 没有出现，那么把事件丢弃
-// 也需要通过 inode 过滤 ，因为内核态查 map 的开销相对小 TODO:
+struct rw_area {
+  ino_t inode;
+  loff_t offset;
+  loff_t len;
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, int);
+  __type(value, struct rw_area);
+  __uint(max_entries, 1024);
+} tid_rw_area_map SEC(".maps");
+
+// 对于 vfs 层的挂载点，由于是完全同步的，所以直接查询当前进程是否处于某个 syscall 下
+// 不需要通过 inode 过滤
 // 对于后续 block layer 层需要用到 inode 号的对应
 // 可以由用户态读 fd 和 inode map 来获取关联
 // // do_iter_read
@@ -1120,8 +1129,8 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
     bpf_debug("do_iter_read enter without enter\n");
     return 0;
   } 
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
     return 0;
   }
   unsigned long nr_bytes = iter->count;
@@ -1130,8 +1139,22 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
 
-  bpf_printk("do_iter_read enter:	ino %lu offset %lu len %lu\n", ino,
-  offset, nr_bytes);
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+  e->event_type = fs__do_iter_read;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+  bpf_printk("do_iter_read enter:	offset %lu len %lu\n",  offset, nr_bytes);
   return 0;
 }
 SEC("fexit/do_iter_read")
@@ -1143,12 +1166,23 @@ int BPF_PROG(trace_do_iter_read_exit, struct file *file) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("do_iter_read exit without enter\n");
     return 0;
   }
 
-  bpf_printk("do_iter_read exit:	ino %lu\n", ino);
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = fs__do_iter_read;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 // do_iter_write
@@ -1161,18 +1195,38 @@ int BPF_PROG(trace_do_iter_write, struct file *file, struct iov_iter *iter) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("do_iter_write enter without enter\n");
     return 0;
   }
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
   unsigned long nr_bytes = iter->count;
   loff_t *pos = NULL;
   loff_t offset = 0;
-  // pos 参数是一个 loff_t * 类型的指针
-  // 导致 ctx 本身是一个二级指针，并且 pos 本身不是结构体，
-  // BPF 对二级指针的支持不是很好，所以这里需要使用 bpf_core_read
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+  e->event_type = fs__do_iter_write;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 SEC("fexit/do_iter_write")
@@ -1184,11 +1238,23 @@ int BPF_PROG(trace_do_iter_write_exit, struct file *file) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("do_iter_write exit without enter\n");
     return 0;
   }
-  // bpf_printk("do_iter_write exit:	ino %lu\n", ino);
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = fs__do_iter_write;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+  bpf_printk("do_iter_write exit:	\n");
   return 0;
 }
 // vfs_iocb_iter_write
@@ -1202,15 +1268,38 @@ int BPF_PROG(trace_vfs_iocb_iter_write, struct file *file, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_iocb_iter_write enter without enter\n");
     return 0;
   }
-  struct inode *inode = file->f_inode;
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
   unsigned long nr_bytes = iter->count;
   loff_t offset = iocb->ki_pos;
-  bpf_printk("vfs_iocb_iter_write enter:	ino %lu offset %lu len %lu\n",
-             ino, offset, nr_bytes);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__vfs_iocb_iter_write;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("vfs_iocb_iter_write enter:	offset %lld, bytes %lu\n", offset,
+            nr_bytes);
   return 0;
 }
 SEC("fexit/vfs_iocb_iter_write")
@@ -1223,12 +1312,26 @@ int BPF_PROG(trace_vfs_iocb_iter_write_exit, struct file *file,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_iocb_iter_write exit without enter\n");
     return 0;
   }
-  struct inode *inode = file->f_inode;
-  bpf_printk("vfs_iocb_iter_write exit:	ino %lu\n", ino);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_iocb_iter_write;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("vfs_iocb_iter_write exit:	ret %ld\n", ret);
   return 0;
 }
 // vfs_iocb_iter_read
@@ -1242,15 +1345,35 @@ int BPF_PROG(trace_vfs_iocb_iter_read, struct file *file, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_iocb_iter_read enter without enter\n");
     return 0;
   }
-  struct inode *inode = file->f_inode;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
   unsigned long nr_bytes = iter->count;
   loff_t offset = iocb->ki_pos;
-  bpf_printk("vfs_iocb_iter_read enter:	ino %lu offset %lu len %lu\n", ino,
-             offset, nr_bytes);
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__vfs_iocb_iter_read;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("vfs_iocb_iter_read enter:	offset %lld, bytes %lu\n", offset,
+            nr_bytes);
   return 0;
 }
 SEC("fexit/vfs_iocb_iter_read")
@@ -1263,11 +1386,26 @@ int BPF_PROG(trace_vfs_iocb_iter_read_exit, struct file *file,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_iocb_iter_read exit without enter\n");
     return 0;
   }
-  bpf_printk("vfs_iocb_iter_read exit:	ino %lu\n", ino);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_iocb_iter_read;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("vfs_iocb_iter_read exit:	ret %ld\n", ret);
   return 0;
 }
 // vfs_read
@@ -1280,19 +1418,43 @@ int BPF_PROG(trace_vfs_read, struct file *file, char *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_read enter without enter\n");
     return 0;
   }
+
   unsigned long nr_bytes = count;
   loff_t *pos = NULL;
   loff_t offset = 0;
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
-  bpf_printk("vfs_read enter:	ino %lu offset %lu len %lu\n", ino, offset,
-             nr_bytes);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+  
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_read;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
+
 SEC("fexit/vfs_read")
 int BPF_PROG(trace_vfs_read_exit, struct file *file, char *buf, size_t count) {
   if (!vfs_enable) {
@@ -1302,11 +1464,26 @@ int BPF_PROG(trace_vfs_read_exit, struct file *file, char *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_read exit without enter\n");
     return 0;
   }
-  bpf_printk("vfs_read exit:	ino %lu\n", ino);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_read;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+
   return 0;
 }
 // vfs_write
@@ -1319,17 +1496,42 @@ int BPF_PROG(trace_vfs_write, struct file *file, char *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_write enter without enter\n");
     return 0;
   }
+
+
   unsigned long nr_bytes = count;
   loff_t *pos = NULL;
   loff_t offset = 0;
   bpf_core_read(&pos, sizeof(pos), ctx + 2);
   bpf_core_read(&offset, sizeof(offset), pos);
-  bpf_printk("vfs_write enter:	ino %lu offset %lu len %lu\n", ino, offset,
-             nr_bytes);
+  
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+  
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_write;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+
   return 0;
 }
 SEC("fexit/vfs_write")
@@ -1341,11 +1543,25 @@ int BPF_PROG(trace_vfs_write_exit, struct file *file, char *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_write exit without enter\n");
     return 0;
   }
-  bpf_printk("vfs_write exit:	ino %lu\n", ino);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__vfs_write;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -1359,13 +1575,34 @@ int BPF_PROG(trace_vfs_fsync_range, struct file *file, loff_t start, loff_t end,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("vfs_fsync_range enter without enter\n");
     return 0;
   }
 
-  bpf_printk("vfs_fsync_range enter:	ino %lu start %lu end %lu\n", ino, start,
-             end);
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = start,
+      .len = end - start,
+  };
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__vfs_fsync_range;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = start;
+  e->fs_layer_info.bytes = end - start;
+  bpf_ringbuf_submit(e, 0);
+
   return 0;
 }
 
@@ -1380,17 +1617,42 @@ int BPF_PROG(trace_generic_file_read_iter, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("generic_file_read_iter enter without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct file *file = iocb->ki_filp;
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
-  bpf_printk("generic_file_read_iter enter:	ino %lu offset %lu len %lu\n",
-             ino, offset, nr_bytes);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__generic_file_read_iter;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
+
 SEC("fexit/generic_file_read_iter")
 int BPF_PROG(trace_generic_file_read_iter_exit, struct kiocb *iocb,
              struct iov_iter *iter, ssize_t ret) {
@@ -1401,11 +1663,26 @@ int BPF_PROG(trace_generic_file_read_iter_exit, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("generic_file_read_iter exit without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__generic_file_read_iter;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+
   return 0;
 }
 // generic_file_write_iter
@@ -1419,15 +1696,39 @@ int BPF_PROG(trace_generic_file_write_iter, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("generic_file_write_iter enter without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct file *file = iocb->ki_filp;
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
-  bpf_printk("generic_file_write_iter enter:	ino %lu offset %lu len %lu\n",
-             ino, offset, nr_bytes);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__generic_file_write_iter;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 SEC("fexit/generic_file_write_iter")
@@ -1440,11 +1741,25 @@ int BPF_PROG(trace_generic_file_write_iter_exit, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("generic_file_write_iter exit without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__generic_file_write_iter;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -1455,19 +1770,44 @@ int BPF_PROG(trace_filemap_get_pages, struct kiocb *iocb,
   if (!vfs_enable) {
     return 0;
   }
+
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("filemap_get_pages enter without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct file *file = iocb->ki_filp;
   loff_t offset = iocb->ki_pos;
   unsigned long nr_bytes = iter->count;
-  bpf_printk("filemap_get_pages enter:	ino %lu offset %lu len %lu\n", ino,
-             offset, nr_bytes);
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__filemap_get_pages;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -1481,11 +1821,25 @@ int BPF_PROG(trace_filemap_get_pages_exit, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("filemap_get_pages exit without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__filemap_get_pages;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -1500,12 +1854,36 @@ int BPF_PROG(trace_file_write_and_wait_range, struct file *file, loff_t start,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("file_write_and_wait_range enter without enter\n");
     return 0;
   }
-  bpf_printk("file_write_and_wait_range:	ino %lu start %lu end %lu\n",
-             ino, start, end);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = start,
+      .len = end - start,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = fs__file_write_and_wait_range;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = start;
+  e->fs_layer_info.bytes = end - start;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("file_write_and_wait_range enter\n");
   return 0;
 }
 
@@ -1521,6 +1899,24 @@ int BPF_PROG(trace_file_write_and_wait_range_exit, struct file *file,
     return 0;
   }
 
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("file_write_and_wait_range exit without enter\n");
+    return 0;
+  }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = fs__file_write_and_wait_range;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   bpf_printk("file_write_and_wait_range exit\n");
   return 0;
 }
@@ -1537,12 +1933,40 @@ int BPF_PROG(trace_enter_iomap_dio_rw, struct kiocb *iocb,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("iomap_dio_rw enter without enter\n");
     return 0;
   }
 
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct file *file = iocb->ki_filp;
+  loff_t offset = iocb->ki_pos;
+  unsigned long nr_bytes = iter->count;
+
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = iomap__dio_rw;
+  e->info_type = fs_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("iomap_dio_rw enter\n");
   return 0;
 }
 SEC("fexit/iomap_dio_rw")
@@ -1555,11 +1979,39 @@ int BPF_PROG(trace_exit_iomap_dio_rw, struct kiocb *iocb, struct iov_iter *iter,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  struct file *file = iocb->ki_filp;
-  ino_t ino = file->f_inode->i_ino;
-  if (vfs_filter_inode(ino)) {
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("iomap_dio_rw exit without enter\n");
     return 0;
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  struct file *file = iocb->ki_filp;
+  loff_t offset = iocb->ki_pos;
+  unsigned long nr_bytes = iter->count;
+  
+  struct rw_area area = {
+      .inode = file->f_inode->i_ino,
+      .offset = offset,
+      .len = nr_bytes,
+  };
+
+  bpf_map_update_elem(&tid_rw_area_map, &tid, &area, BPF_ANY);
+
+  e->event_type = iomap__dio_rw;
+  e->info_type = fs_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  e->fs_layer_info.offset = offset;
+  e->fs_layer_info.bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -1570,23 +2022,39 @@ int handle_tp_sched_1(struct bpf_raw_tracepoint_args *ctx) {
   }
   struct task_struct *prev = (struct task_struct *)(ctx->args[0]);
   struct task_struct *next = (struct task_struct *)(ctx->args[1]);
-  pid_t prev_pid = BPF_CORE_READ(prev, pid);
-  pid_t next_pid = BPF_CORE_READ(next, pid);
-  pid_t prev_tgid = BPF_CORE_READ(prev, tgid);
-  pid_t next_tgid = BPF_CORE_READ(next, tgid);
-  // filter , at least one of them is in the filter
-  if (filter_config.tgid != 0 &&
-      (filter_config.tgid != prev_tgid && filter_config.tgid != next_tgid)) {
+  pid_t prev_tid = BPF_CORE_READ(prev, pid);
+  pid_t next_tid = BPF_CORE_READ(next, pid);
+
+  int* prev_tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &prev_tid);
+  if(prev_tid_syscall_enter != NULL){
+    struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+    if(e == NULL){
+      return 0;
+    }
+    e->event_type = sched__switch;
+    e->info_type = sched_layer;
+    e->trigger_type = NOT_PAIR;
+    e->timestamp = bpf_ktime_get_ns();
+    e->sched_layer_info.prev_tid = prev_tid;
+    e->sched_layer_info.next_tid = next_tid;
+    bpf_ringbuf_submit(e, 0);
     return 0;
   }
 
-  if (filter_config.tid != 0 &&
-      (filter_config.tid != prev_pid && filter_config.tid != next_pid)) {
-    return 0;
+  int* next_tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &next_tid);
+  if(next_tid_syscall_enter != NULL){
+    struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+    if(e == NULL){
+      return 0;
+    }
+    e->event_type = sched__switch;
+    e->info_type = sched_layer;
+    e->trigger_type = NOT_PAIR;
+    e->timestamp = bpf_ktime_get_ns();
+    e->sched_layer_info.prev_tid = prev_tid;
+    e->sched_layer_info.next_tid = next_tid;
+    bpf_ringbuf_submit(e, 0);
   }
-
-  bpf_printk("sched_switch target prev_pid: %d next_pid: %d\n", prev_pid,
-             next_pid);
   return 0;
 }
 
@@ -1702,7 +2170,6 @@ static inline bool rq_is_passthrough(unsigned int rq_cmd_flags) {
 }
 
 
-
 /* block layer (bio request) */
 // bio refference map
 // if the bio is not in the map, it means no process is referring to it
@@ -1725,8 +2192,8 @@ struct {
 } request_ref_map SEC(".maps");
 //TODO: 进程级别的 io 活动分析
 
-long long active_bio_cnt = 0;
-long long active_rq_cnt = 0;
+long long global_bio_id = 0;
+long long global_rq_id = 0;
 
 // SEC("tp_btf/block_split") // 不影响主 bio，应该不用管
 // int handle_tp3(struct bpf_raw_tracepoint_args *ctx)
@@ -1738,6 +2205,13 @@ long long active_rq_cnt = 0;
 // 		   new_sector);
 // 	return 0;
 // }
+int checkIntersection(loff_t start1, loff_t end1, loff_t start2, loff_t end2) {
+  // [100,200] is not intersect with [200,300]
+  if (start1 >= end2 || start2 >= end1) {
+    return 0;
+  }
+  return 1;
+}
 
 SEC("tp_btf/block_bio_queue") // 开始追踪一个 bio
 int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
@@ -1745,46 +2219,61 @@ int handle_tp7(struct bpf_raw_tracepoint_args *ctx)
   if(!block_enable){
     return 0;
   }
+
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    if(tid == 0){
+      bpf_debug("filted tid = 0 bio queue\n");
+      //TODO: trace whole system bio
+    }
+    return 0;
+  }
+
+  int* tid_in_syscall = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_in_syscall == NULL){
+    return 0;
+  }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
 	struct bio *bio = (struct bio *)(ctx->args[0]);
 	struct bio_vec *first_bv = bio->bi_io_vec;
 	struct page *first_page = first_bv->bv_page;
-	struct inode *inode = first_page->mapping->host;
-	ino_t i_ino = inode->i_ino;
-  // check if inode is in the ino_ref_map
-  // if not, return
-  int *ino_ref = bpf_map_lookup_elem(&inode_ref_map, &i_ino);
-  if (ino_ref == NULL) {
-    return 0;
-  } else {
-    // bpf_debug("ino_ref_map: %d\n", *ino_ref);
-    bpf_debug("block_bio_queue target i_ino: %ld\n", i_ino);
-  }
 
   // add to bio_ref_map
+  long long bio_id = 0;
   int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
   if (bio_ref == NULL) {
-    int a = 0;
-    bpf_map_update_elem(&bio_ref_map, &bio, &a, BPF_ANY);
-    bpf_debug("block_bio_queue bio curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, 1));
+    bio_id = __sync_fetch_and_add(&global_bio_id, 1);
+    bpf_map_update_elem(&bio_ref_map, &bio, &bio_id, BPF_ANY);
+    bpf_debug("block_bio_queue bio curr active_bio_cnt: %lld\n", bio_id);
   } else {
+    bio_id = *bio_ref;
     bpf_debug("block_bio_queue bio %lx already in bio_ref_map\n", bio);
   }
+
    // 近似的计算 bio 对应文件逻辑地址的大致范围（认为 bio 的 bi_vec 是顺序递增的）
   // 用于和 vfs 的请求进行匹配
+	int last_index = (bio->bi_vcnt - 1) & ((1<<20) - 1);
 
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	int last_index = (bio->bi_vcnt - 1) & (512 - 1);
 	struct bio_vec last_bv;
 	bpf_core_read(&last_bv, sizeof(struct bio_vec), first_bv + last_index);
 	int last_page_index = BPF_CORE_READ(last_bv.bv_page, index);
-	// struct bio_vec *last_bv = &bio->bi_io_vec[last_index];
 	loff_t start_offset = (first_page->index << 12) + first_bv->bv_offset;
 	loff_t end_offset = (last_page_index << 12) + last_bv.bv_offset + last_bv.bv_len;
-	bpf_printk("block_bio_queue target  bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
-	bpf_printk("                       i_ino: %ld start_offset: %ld end_offset: %ld\n", i_ino,
-		   start_offset, end_offset);
+  e->event_type = block__bio_queue;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.tgid = tgid;
+  e->block_layer_info.tid = tid;
+  e->block_layer_info.bio_id = bio_id;
+  e->block_layer_info.approximate_filemap_start_offset = start_offset;
+  e->block_layer_info.approximate_filemap_len = end_offset - start_offset;
+  bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 
@@ -1802,14 +2291,20 @@ int handle_tp6(struct bpf_raw_tracepoint_args *ctx)
   int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
   if (bio_ref == NULL) {
     return 0;
-  } else {
-    bpf_debug("bio_ref_map: %d\n", *bio_ref);
   }
 
-	sector_t sector = bio->bi_iter.bi_sector;
-	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-	bpf_printk("block_bio_bounce target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-		   nr_sector);
+  int bio_id = *bio_ref;
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__bio_bounce;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = bio_id;
+  bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 
@@ -1820,24 +2315,39 @@ int BPF_PROG(trace_rq_qos_track, struct rq_qos *q, struct request *rq, struct bi
   if(!block_enable){
     return 0;
   }
+
+  long long rq_id, bio_id;
   // check bio_ref_map
   // if exsits,  add rq to request_ref_map
   int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
   if (bio_ref == NULL) {
     return 0;
-  } else {
-  }
-  // add to request_ref_map
+  } 
+
+  bio_id = *bio_ref;
+  
+    // add to request_ref_map
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
-    int a = 0;
-    bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
-    bpf_debug("rq_qos_track bio: %lx rq:%lx\n", bio,rq);
-    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
+    rq_id = __sync_fetch_and_add(&global_rq_id, 1); 
+    bpf_map_update_elem(&request_ref_map, &rq, &rq_id, BPF_ANY);
   } else {
+    rq_id = *request_ref;
     bpf_debug("rq_qos_track:request %lx already in request_ref_map\n",rq);
   }
-	// bpf_printk("rq_qos_track target bio: %lx rq: %lx\n", bio, rq);
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__bio_add_to_rq;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = bio_id;
+  e->block_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+	bpf_printk("rq_qos_track target bio: %lx rq: %lx\n", bio, rq);
 	return 0;
 }
 
@@ -1847,48 +2357,40 @@ int BPF_PROG(trace_rq_qos_merge, struct rq_qos *q, struct request *rq, struct bi
   if(!block_enable){
     return 0;
   }
-  // check bio_ref_map
-  // if exsits,  add rq to request_ref_map
+  long long rq_id, bio_id;
+
   int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
   if (bio_ref == NULL) {
     return 0;
-  } else {
-  }
-  // add to request_ref_map
+  } 
+
+  bio_id = *bio_ref;
+  
+    // add to request_ref_map
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
-    int a = 0;
-    bpf_map_update_elem(&request_ref_map, &rq, &a, BPF_ANY);
-    bpf_debug("rq_qos_merge bio: %lx rq: %lx\n", bio,rq);
-    bpf_debug("curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, 1));
+    rq_id = __sync_fetch_and_add(&global_rq_id, 1); 
+    bpf_map_update_elem(&request_ref_map, &rq, &rq_id, BPF_ANY);
   } else {
-    bpf_debug("rq_qos_merge:request %lx already in request_ref_map\n", rq);
+    rq_id = *request_ref;
+    bpf_debug("rq_qos_merge:request %lx already in request_ref_map\n",rq);
   }
-	// bpf_printk("rq_qos_merge target bio: %lx rq: %lx\n", bio, rq);
-	return 0;
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__bio_add_to_rq;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = bio_id;
+  e->block_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+	bpf_printk("rq_qos_merge target bio: %lx rq: %lx\n", bio, rq);
+  return 0;
 }
 
-// SEC("tp_btf/block_bio_backmerge")
-// int handle_tp8(struct bpf_raw_tracepoint_args *ctx)
-// {
-// 	struct bio *bio = (struct bio *)(ctx->args[0]);
-// 	sector_t sector = bio->bi_iter.bi_sector;
-// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-// 	bpf_printk("block_bio_backmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-// 		   nr_sector);
-// 	return 0;
-// }
-
-// SEC("tp_btf/block_bio_frontmerge")
-// int handle_tp9(struct bpf_raw_tracepoint_args *ctx)
-// {
-// 	struct bio *bio = (struct bio *)(ctx->args[0]);
-// 	sector_t sector = bio->bi_iter.bi_sector;
-// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-// 	bpf_printk("block_bio_frontmerge target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-// 		   nr_sector);
-// 	return 0;
-// }
 SEC("fentry/__rq_qos_done_bio") // 代替 block_bio_complete, 用来删除 bio 的引用
 int BPF_PROG(trace_rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
 {
@@ -1896,15 +2398,28 @@ int BPF_PROG(trace_rq_qos_done_bio, struct rq_qos *q, struct bio *bio)
     return 0;
   }
   // if bio is in bio_ref_map, delete it
+  long long bio_id;
   int *bio_ref = bpf_map_lookup_elem(&bio_ref_map, &bio);
   if (bio_ref == NULL) {
     return 0;
   } else {
+    bio_id = *bio_ref;
     bpf_map_delete_elem(&bio_ref_map, &bio);
-    // active_bio_cnt--;
-    bpf_debug("curr active_bio_cnt: %lld\n", __sync_fetch_and_add(&active_bio_cnt, -1));
-	  bpf_printk("rq_qos_done_bio target bio: %lx\n", bio);
+	  bpf_debug("rq_qos_done_bio target bio: %lx\n", bio);
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = block__bio_done;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = bio_id;
+  e->block_layer_info.rq_id = 0;
+  bpf_ringbuf_submit(e, 0);
 
 	return 0;
 }
@@ -1923,75 +2438,21 @@ int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
   } else {
 	  bpf_printk("rq_qos_throttle target  bio: %lx\n", bio);
   }
-	return 0;
-}
 
-// SEC("tp_btf/block_bio_complete")
-// int handle_tp10(struct bpf_raw_tracepoint_args *ctx)
-// {
-// 	struct bio *bio = (struct bio *)(ctx->args[1]);
-// 	sector_t sector = bio->bi_iter.bi_sector;
-// 	size_t nr_sector = bio->bi_iter.bi_size >> 9;
-// 	bpf_printk("block_bio_complete target bio: %lx sector: %ld nr_sector: %ld\n", bio, sector,
-// 		   nr_sector);
-// 	return 0;
-// }
-
-SEC("tp_btf/block_rq_insert")
-int handle_tp4(struct bpf_raw_tracepoint_args *ctx)
-{ 
-  if(!block_enable){
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
     return 0;
   }
-  // check if request is in request_ref_map
-  // if not, return
-	struct request *rq = (struct request *)(ctx->args[0]);
-  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
-  if (request_ref == NULL) {
-    return 0;
-  } else {
-    // bpf_debug("request_ref_map: %d\n", *request_ref);
-  }
-	long nr_sector = rq->__data_len;
-	sector_t sector = rq->__sector;
-	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_sector);
+
+  e->event_type = block__bio_done;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = *bio_ref;
+  e->block_layer_info.rq_id = 0;
+  bpf_ringbuf_submit(e, 0);
 	return 0;
 }
-
-// SEC("tp_btf/block_rq_issue")
-// int handle_tp(struct bpf_raw_tracepoint_args *ctx)
-// { // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
-//   if(!block_enable){
-//     return 0;
-//   }
-//   // check if request is in request_ref_map
-//   // if not, return
-// 	struct request *rq = (struct request *)(ctx->args[0]);
-//   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
-//   if (request_ref == NULL) {
-//     return 0;
-//   } else {
-//     bpf_debug("request_ref_map: %d\n", *request_ref);
-//   }
-// 	long nr_sector = rq->__data_len;
-// 	sector_t sector = rq->__sector;
-// 	bpf_printk(" rq_issue target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
-// 	return 0;
-// }
-
-// SEC("tp_btf/block_rq_complete")
-// int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
-// {
-// 	struct request *rq = (struct request *)(ctx->args[0]);
-// 	// dev_t dev = rq->part->bd_dev;
-// 	// tracepoint 里面是 __entry->dev	   = rq->rq_disk ? disk_devt(rq->rq_disk) : 0;
-// 	sector_t sector = rq->__sector;
-// 	long nr_sector = rq->__data_len;
-// 	bpf_printk(" rq_complete target rq: %lx start: %ld len: %ld\n", rq, sector, nr_sector);
-// 	return 0;
-// }
-
-
 
 SEC("fentry/__rq_qos_done") // 用来代替 block_rq_complete, 用来删除 request 的引用
 int BPF_PROG(trace_rq_qos_done, struct rq_qos *q, struct request *rq)
@@ -2005,10 +2466,21 @@ int BPF_PROG(trace_rq_qos_done, struct rq_qos *q, struct request *rq)
     return 0;
   } else {
     bpf_map_delete_elem(&request_ref_map, &rq);
-    // active_rq_cnt--;
-    bpf_debug("rq_qos_done: curr active_rq_cnt: %lld\n", __sync_fetch_and_add(&active_rq_cnt, -1));
+    bpf_debug("rq_qos_done\n" );
   }
 
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = block__rq_done;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = 0;
+  e->block_layer_info.rq_id = *request_ref;
+  bpf_ringbuf_submit(e, 0);
 	bpf_printk("rq_qos_done target rq: %lx\n", rq);
 	return 0;
 }
@@ -2022,15 +2494,26 @@ int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
   if(!block_enable){
     return 0;
   }
-  // check if request is in request_ref_map
-  // if not, return
+  long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
-  } else {
-	  bpf_printk("rq_qos_issue target  rq: %lx\n", rq);
   }
-
+  rq_id = *request_ref;
+	long nr_sector = rq->__data_len;
+	sector_t sector = rq->__sector;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__rq_issue;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = 0;
+  e->block_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_sector);
 	return 0;
 }
 
@@ -2043,12 +2526,26 @@ int BPF_PROG(trace_rq_qos_requeue, struct rq_qos *q, struct request *rq)
   }
   // check if request is in request_ref_map
   // if not, return
+  long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
   } else {
 	bpf_printk("rq_qos_requeue target  rq: %lx\n", rq);
   }
+
+  rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__rq_requeue;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = 0;
+  e->block_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 
@@ -2064,6 +2561,7 @@ int handle_tp_nvme_1(struct bpf_raw_tracepoint_args *ctx)
 	struct request *rq = (struct request *)(ctx->args[0]);
   // check if request is in request_ref_map
   // if not, return
+  long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
@@ -2071,7 +2569,17 @@ int handle_tp_nvme_1(struct bpf_raw_tracepoint_args *ctx)
   }
 	struct nvme_command *cmd = (struct nvme_command *)(ctx->args[1]);
 
-
+  rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = nvme__setup_cmd;
+  e->info_type = nvme_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->nvme_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
 	bpf_printk("nvme_setup_cmd rq: %llx\n", rq);
 	return 0;
 }
@@ -2085,13 +2593,25 @@ int handle_tp_nvme_2(struct bpf_raw_tracepoint_args *ctx)
 	struct request *rq = (struct request *)(ctx->args[0]);
   // check if request is in request_ref_map
   // if not, return
+  long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
   } else {
   }
-	bpf_printk("nvme_complete_rq rq: %llx\n", rq);
-	return 0;
+  rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = nvme__complete_rq;
+  e->info_type = nvme_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = 0;
+  e->block_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+  return 0;
 }
 
 SEC("tp_btf/nvme_sq")
@@ -2103,13 +2623,24 @@ int handle_tp_nvme_4(struct bpf_raw_tracepoint_args *ctx)
 	struct request *rq = (struct request *)(ctx->args[0]);
   // check if request is in request_ref_map
   // if not, return
+  long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
   } else {
   }
-	bpf_printk("nvme_sq rq: %llx\n", rq);
-	return 0;
+  rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = nvme__sq;
+  e->info_type = nvme_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->nvme_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+  return 0;
 }
 
 /* scsi */
@@ -2126,8 +2657,19 @@ int handle_tp_scsi_1(struct bpf_raw_tracepoint_args *ctx)
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
-  } else {
   }
+
+  long long rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = scsi__dispatch_cmd_start;
+  e->info_type = scsi_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->scsi_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
 
 	bpf_printk("scsi_dispatch_cmd_start rq: %lx\n", (unsigned long)rq);
 	return 0;
@@ -2148,6 +2690,18 @@ int handle_tp_scsi_2(struct bpf_raw_tracepoint_args *ctx)
     return 0;
   } else {
   }
+  
+  long long rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = scsi__dispatch_cmd_error;
+  e->info_type = scsi_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->scsi_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
 	bpf_printk("scsi_dispatch_cmd_error rq: %lx\n", (unsigned long)rq);
 	return 0;
 }
@@ -2167,6 +2721,19 @@ int handle_tp_scsi_3(struct bpf_raw_tracepoint_args *ctx)
     return 0;
   } else {
   }
+
+  long long rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = scsi__dispatch_cmd_done;
+  e->info_type = scsi_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->scsi_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+
 	bpf_printk("scsi_dispatch_cmd_done rq: %lx\n", (unsigned long)rq);
 
 	return 0;
@@ -2185,9 +2752,19 @@ int handle_tp_scsi_4(struct bpf_raw_tracepoint_args *ctx)
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
-  } else {
   }
-	bpf_printk("scsi_dispatch_cmd_timeout rq: %lx\n", (unsigned long)rq);
+  long long rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = scsi__dispatch_cmd_timeout;
+  e->info_type = scsi_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->scsi_layer_info.rq_id = rq_id;
+  bpf_ringbuf_submit(e, 0);
+  bpf_printk("scsi_dispatch_cmd_timeout rq: %lx\n", (unsigned long)rq);
 	return 0;
 }
 /* virtio-blk */
@@ -2200,7 +2777,7 @@ int handle_tp_scsi_4(struct bpf_raw_tracepoint_args *ctx)
 SEC("fentry/virtio_queue_rq")
 int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
 {
-    if(!virtio_enable){
+  if(!virtio_enable){
     return 0;
   }
 	struct request *rq = bd->rq;
@@ -2211,48 +2788,24 @@ int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_qu
     return 0;
   } else {
   }
-	loff_t offset = rq->__sector << 9;
+	long long sector = rq->__sector;
 	unsigned long nr_bytes = rq->__data_len << 9;
   dev_t dev = rq->rq_disk->major << 20 | rq->rq_disk->first_minor;
-	bpf_printk("virtio_queue_rq target rq: %lx offset %lx bytes %lx\n", rq, offset, nr_bytes);
+
+  long long rq_id = *request_ref;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = virtio__queue_rq;
+  e->info_type = virtio_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->virtio_layer_info.rq_id = rq_id;
+  e->virtio_layer_info.sector = sector;
+  e->virtio_layer_info.nr_bytes = nr_bytes;
+  e->virtio_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
 	return 0;
 }
-
-/* virtio-pci */
-
-
-// #include <qemu/osdep.h>
-// #include "hw/virtio/virtio-blk.h"
-// #include "block/thread-pool.h"
-
-// /* qemu user space */
-// #define QEMU_EXE "/home/hrpccs/workspace/qemu-proj/qemu/build/x86_64-softmmu/qemu-system-x86_64"
-// #define UPROBE_QEMU_HOOK(hook_point_name) "uprobe/" QEMU_EXE ":"  hook_point_name
-
-
-// //virtio_blk_handle_request
-// SEC(UPROBE_QEMU_HOOK("virtio_blk_handle_request"))
-// int BPF_KPROBE(uprobe_virtio_blk_handle_request, VirtIOBlockReq *req, MultiReqBuffer *mrb)
-// { 
-// 	bpf_printk("virtio_blk_handle_request %lx %lx\n", req, mrb);
-// 	// VirtIODevice* vdev = (VirtIODevice*)BPF_CORE_READ_USER(req,dev);
-// 	VirtIOBlock *vblk;
-// 	VirtIODevice *vdev;
-// 	VirtQueue *vq;
-// 	int queue_index = 0;
-// 	long long offset = 0;
-// 	bpf_probe_read_user(&vq, sizeof(VirtQueue *), &(req->vq));
-// 	// long long nr_bytes = 0;
-// 	bpf_probe_read_user(&offset, sizeof(long long), &(req->sector_num));
-// 	// bpf_probe_read_user(&nr_bytes,sizeof(long long),&(req->qiov.size));
-// 	bpf_probe_read_user(&vblk, sizeof(VirtIOBlock *), &(req->dev));
-// 	vdev = &(vblk->parent_obj);
-// 	int device_id = 0;
-// 	bpf_probe_read_user(&device_id, sizeof(int), &(vdev->device_id));
-// 	bpf_printk("dev_id: %lx, queue_index: %lx,offset: %llx\n", device_id,queue_index, offset << 9);
-// 	return 0;
-// }
-//virtio_blk_req_complete
-// SEC(UPROBE_QEMU_HOOK(virtio_blk_req_complete))
-
 

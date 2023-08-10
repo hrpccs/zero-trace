@@ -56,7 +56,9 @@ static void sig_handler(int sig) {
 int once = 0;
 
 static int handle_event(void *ctx, void *data, size_t data_sz) {
-  assert(data_sz == sizeof(struct event));
+  // printf("event size is %ld\n", sizeof(struct event));
+  // printf("data size is %ld\n", data_sz);
+  // assert(data_sz == sizeof(struct event));
   struct event *e = (struct event *)data;
   if(e->info_type == qemu_layer){
     int type = e->event_type;
@@ -79,6 +81,47 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
     int dev = e->syscall_layer_info.dev;
 
     fprintf(stdout,"event type: %s, trigger type: %d, tid: %d, tgid: %d, fd: %d, inode: %d, dir_inode: %d, dev: %d\n", kernel_hook_type_str[type], trigger, tid, tgid, fd, inode, dir_inode, dev);
+  }else if(e->info_type == fs_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int tid = e->fs_layer_info.tid;
+    int tgid = e->fs_layer_info.tgid;
+    unsigned long offset = e->fs_layer_info.offset;
+    unsigned long nr_bytes = e->fs_layer_info.bytes;
+
+    fprintf(stdout,"event type: %s, trigger type: %d, tid: %d, tgid: %d, offset: %lu, nr_bytes: %lu\n", kernel_hook_type_str[type], trigger, tid, tgid, offset, nr_bytes);
+  }else if(e->info_type == sched_layer){
+    int prev_tid = e->sched_layer_info.prev_tid;
+    int next_tid = e->sched_layer_info.next_tid;
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    fprintf(stdout,"event type: %s, trigger type: %d, prev_tid: %d, next_tid: %d\n", kernel_hook_type_str[type], trigger, prev_tid, next_tid);
+  } else if (e->info_type == block_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int tid = e->block_layer_info.tid;
+    int tgid = e->block_layer_info.tgid;
+    long long offset = e->block_layer_info.approximate_filemap_start_offset;
+    long long len = e->block_layer_info.approximate_filemap_len;
+    fprintf(stdout,"event type: %s, trigger type: %d, tid: %d, tgid: %d, offset: %lld, len: %lld\n", kernel_hook_type_str[type], trigger, tid, tgid, offset, len);
+  } else if(e->info_type == nvme_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int rq_id = e->nvme_layer_info.rq_id;
+    fprintf(stdout,"event type: %s, trigger type: %d, rq_id: %d\n", kernel_hook_type_str[type], trigger, rq_id);
+  } else if(e->info_type == scsi_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int rq_id = e->scsi_layer_info.rq_id;
+    fprintf(stdout,"event type: %s, trigger type: %d, rq_id: %d\n", kernel_hook_type_str[type], trigger, rq_id);
+  } else if(e->info_type == virtio_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int rq_id = e->virtio_layer_info.rq_id;
+    long long sector = e->virtio_layer_info.sector;
+    long long nr_bytes = e->virtio_layer_info.nr_bytes;
+    unsigned int dev = e->virtio_layer_info.dev;
+    fprintf(stdout,"event type: %s, trigger type: %d, rq_id: %d, sector: %lld, nr_bytes: %lld, dev: %u\n", kernel_hook_type_str[type], trigger, rq_id, sector, nr_bytes, dev);
   }
   // const char *event_type_str = kernel_hook_type_str[e->event_type];
   // const char *layer_type_str = info_type_str[e->info_type];
@@ -114,16 +157,15 @@ void parse_args(int argc, char **argv) {
   printf("Parsing arguments\n");
   output_file = stdout;
 
-  skel->bss->qemu_enable = 1;
+  skel->bss->qemu_enable = 0;
   skel->bss->syscall_enable = 1;
   skel->bss->vfs_enable = 1;
   skel->bss->block_enable = 1;
-  skel->bss->scsi_enable = 1;
-  skel->bss->nvme_enable = 1;
-  skel->bss->ext4_enable = 0;
+  skel->bss->scsi_enable = 0;
+  skel->bss->nvme_enable = 0;
   skel->bss->filemap_enable = 0;
-  skel->bss->iomap_enable = 1;
-  skel->bss->sched_enable = 0;
+  skel->bss->iomap_enable = 0;
+  skel->bss->sched_enable = 1;
   skel->bss->virtio_enable = 0;
 
 
@@ -264,13 +306,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to attach BPF skeleton\n");
     goto cleanup;
   }
-  err = qemu_uprobe_bpf::attach(qemu_uprobe_skel);
+  // err = qemu_uprobe_bpf::attach(qemu_uprobe_skel);
   if (err) {
     fprintf(stderr, "Failed to attach BPF skeleton\n");
     goto cleanup;
   }
   /* Set up ring buffer polling */
-  rb_fd = bpf_map__fd(qemu_uprobe_skel->maps.ringbuffer);
+  rb_fd = bpf_map__fd(skel->maps.ringbuffer);
   rb = ring_buffer__new(rb_fd, handle_event, NULL, NULL);
   if (!rb) {
     err = -1;

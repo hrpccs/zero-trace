@@ -35,8 +35,8 @@
   X(fs__generic_file_write_iter)                                               \
   X(fs__filemap_get_pages)                                                     \
   X(fs__file_write_and_wait_range)                                             \
-  X(iomap__iomap_dio_rw)                                                       \
-  X(sched__sched_switch)                                                       \
+  X(iomap__dio_rw)                                                       \
+  X(sched__switch)                                                       \
   X(pagecache__delete_from_page_cache)                                         \
   X(pagecache__add_to_page_cache)                                              \
   X(pagecache__mark_page_accessed)                                             \
@@ -70,6 +70,7 @@ static const char *kernel_hook_type_str[] = {
   X(qemu_layer)                                                                      \
   X(syscall_layer)                                                                   \
   X(fs_layer)                                                                        \
+  X(sched_layer) \
   X(block_layer)                                                                     \
   X(nvme_layer)                                                                      \
   X(scsi_layer)                                                                      \
