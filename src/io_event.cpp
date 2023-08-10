@@ -169,24 +169,24 @@ void BioObject::isRelative(unsigned long long inode, unsigned long long offset,
 }
 
 void BioObject::updateBioStatus(std::shared_ptr<SyncEvent> event) {
-  if (event->event_type == block_rq_complete) {
-    isDone = true;
-  }
-  if (event->event_type == block_rq_issue) {
-    isIssued = true;
-  }
-  if (event->event_type == rq_qos_requeue) {
-    isIssued = false;
-  }
+  // if (event->event_type == block_rq_complete) {
+  //   isDone = true;
+  // }
+  // if (event->event_type == block_rq_issue) {
+  //   isIssued = true;
+  // }
+  // if (event->event_type == rq_qos_requeue) {
+  //   isIssued = false;
+  // }
 }
 
 void BioObject::addRelativeEvent(std::shared_ptr<SyncEvent> event) {
-  if (isIssued) {
-    if (event->event_type == block_unplug ||
-        event->event_type == block_plug) {
-      return;
-    }
-  }
+  // if (isIssued) {
+  //   if (event->event_type == block_unplug ||
+  //       event->event_type == block_plug) {
+  //     return;
+  //   }
+  // }
   relative_events.push_back(event);
   updateBioStatus(event);
 }

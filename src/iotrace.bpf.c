@@ -24,6 +24,7 @@ struct request *cmd_to_rq(void *cmd)
 {
 	return (void *)cmd - (sizeof(struct request));
 }
+
 // HINT:
 // 设置进程过滤是必须的！
 // 这是出于现在大多数应用都是多线程的，如果不设置，会导致大量的无用的数据
@@ -55,12 +56,12 @@ struct {
   __uint(max_entries, 1 << 10);
 } fd_filted_map SEC(".maps");
 
-
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 1 << 20);
   __uint(pinning, LIBBPF_PIN_BY_NAME);
-} rb SEC(".maps");
+} ringbuffer SEC(".maps");
+
 
 struct filter_config filter_config = {
     .tgid = 0,
@@ -107,26 +108,6 @@ static inline int task_comm_dropable(char *comm) {
   return 0;
 }
 
-static inline void set_common_info(struct event *task_info, pid_t tgid,
-                                   pid_t tid, enum kernel_hook_type event_type,
-                                   enum info_type info_type) {
-  task_info->pid = tgid;
-  task_info->tid = tid;
-  task_info->event_type = event_type;
-  task_info->info_type = info_type;
-  task_info->timestamp = bpf_ktime_get_ns();
-}
-
-static inline void set_fs_info(struct event *task_info, ino_t inode,
-                               ino_t dir_inode, dev_t dev,
-                               unsigned long long file_offset,
-                               unsigned long long file_bytes) {
-  task_info->vfs_layer_info.inode = inode;
-  task_info->vfs_layer_info.file_offset = file_offset;
-  task_info->vfs_layer_info.file_bytes = file_bytes;
-  task_info->vfs_layer_info.dev = dev;
-  task_info->vfs_layer_info.dir_inode = dir_inode;
-}
 
 static int inline pid_filter(pid_t tgid, pid_t tid) {
   // assert(filter_config.tgid != 0 || filter_config.tid != 0); !
@@ -227,6 +208,10 @@ static int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *in
   return 0;
 }
 
+// struct {
+
+// } 
+
 /* read_write syscall  read_write.c */
 // read_enter/exit
 SEC("ksyscall/read")
@@ -244,11 +229,11 @@ int BPF_KPROBE_SYSCALL(read, int fd, void *buf, size_t count) {
     return 0;
   }
   // TODO:
-  struct event * e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
   if (e) {
     bpf_debug("submit event iotrace\n");
-    e->event_type = vfs_write_enter;
-    e->info_type = vfs_layer;
+    e->event_type = syscall__read;
+    e->info_type = syscall_layer;
     bpf_ringbuf_submit(e, 0);
   }
 
@@ -1016,6 +1001,22 @@ int BPF_PROG(trace_file_write_and_wait_range, struct file *file, loff_t start,
   return 0;
 }
 
+SEC("fexit/file_write_and_wait_range")
+int BPF_PROG(trace_file_write_and_wait_range_exit, struct file *file,
+             loff_t start, loff_t end) {
+  if (!vfs_enable) {
+    return 0;
+  }
+
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  bpf_printk("file_write_and_wait_range exit\n");
+  return 0;
+}
+
 /* iomap */
 // iomap_dio_rw
 SEC("fentry/iomap_dio_rw")
@@ -1192,24 +1193,6 @@ static inline bool rq_is_passthrough(unsigned int rq_cmd_flags) {
   return false;
 }
 
-static inline void set_rq_comm_info(struct event *task_info, struct request *rq,
-                                    dev_t dev) {
-  task_info->rq_info.dev = dev;
-  task_info->rq_info.rq = (unsigned long long)rq;
-  task_info->rq_info.request_queue = (unsigned long long)BPF_CORE_READ(rq, q);
-}
-
-static inline void set_common_bio_info(struct event *task_info, struct bio *bio,
-                                       dev_t dev) {
-  task_info->bio_info.bio = (unsigned long long)bio;
-  task_info->bio_info.dev = dev;
-  task_info->bio_info.bio_info_type = comm_bio;
-  struct bvec_iter bi_iter = BPF_CORE_READ(bio, bi_iter);
-  task_info->bio_info.bvec_idx_start = bi_iter.bi_idx;
-  struct bio *parent_bio = BPF_CORE_READ(bio, bi_private);
-  bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
-  task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
-}
 
 
 /* block layer (bio request) */

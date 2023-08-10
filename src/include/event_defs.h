@@ -5,43 +5,36 @@
 #define MAX_BIO_PER_RQ 31
 #define MAX_BVEC_PER_BIO 255
 #define MAXLEN_VMA_NAME 64
-#define MAX_LEVEL 8 
+#define MAX_LEVEL 8
 
-struct bvec {
-  unsigned long long inode;
-  unsigned long long index;
-  unsigned long long bv_len;
-  unsigned long long bv_offset;
-};
-struct bvec_array_info {
-  unsigned long long bio;
-  enum info_type info_type;
-  struct bvec bvecs[MAX_BVEC_PER_BIO];
-  unsigned int bvec_cnt;
-};
 
-struct abs_path {
-  char name[MAX_LEVEL][MAXLEN_VMA_NAME+1];	//abslote object file path
-  char disk_name[40];
-  int partno;
-  int has_root;
-  unsigned long long inode;
+enum rq_type{
+  RQ_TYPE_READ = 0,
+  RQ_TYPE_WRITE = 1,
+  RQ_TYPE_FLUSH = 2,
+  // TODO: support blow。。
+  RQ_TYPE_DISCARD = 3,
+  RQ_TYPE_WRITE_SAME = 4,
+  RQ_TYPE_WRITE_ZEROES = 5,
+  RQ_TYPE_ZONE_APPEND = 6,
+  RQ_TYPE_ZONE_RESET = 7,
+  RQ_TYPE_ZONE_MAP = 8,
+  RQ_TYPE_MAX = 9,
 };
-
-enum bio_info_type {
-  queue_first_bio,
-  split_bio,
-  comm_bio,
-};
-
 struct event {
   long long timestamp;
-  int pid;
-  int tid;
   enum kernel_hook_type event_type;
   enum info_type info_type;
-  char comm[MAX_COMM_LEN];
+  enum trigger_type trigger_type;
   union {
+    struct {
+      int tid;
+      enum rq_type rq_type;
+      long long virt_rq_addr;
+      long long offset;
+      int nr_bytes;
+      int prev_tid;
+    } qemu_layer_info;
     struct {
       unsigned long dev;
       unsigned long long inode;
@@ -52,7 +45,6 @@ struct event {
     struct {
       unsigned long long bio;
       unsigned long long parent_bio;
-      enum bio_info_type bio_info_type;
       unsigned long dev;
       unsigned short bvec_idx_start;
       unsigned short bvec_idx_end;

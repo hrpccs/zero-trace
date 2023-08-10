@@ -56,11 +56,22 @@ static void sig_handler(int sig) {
 int once = 0;
 
 static int handle_event(void *ctx, void *data, size_t data_sz) {
-  // assert(false);
+  assert(data_sz == sizeof(struct event));
   struct event *e = (struct event *)data;
-  const char *event_type_str = kernel_hook_type_str[e->event_type];
-  const char *layer_type_str = info_type_str[e->info_type];
-  fprintf(stdout,"event type: %s, layer type: %s\n", event_type_str, layer_type_str);
+  if(e->info_type == qemu_layer){
+    int type = e->event_type;
+    int trigger = e->trigger_type;
+    int tid = e->qemu_layer_info.tid;
+    int async_task_id = e->qemu_layer_info.prev_tid;
+    long long offset = e->qemu_layer_info.offset;
+    long long nr_bytes = e->qemu_layer_info.nr_bytes;
+    long long rqaddr = e->qemu_layer_info.virt_rq_addr;
+    // fprintf(stdout,"event type: %s, trigger type: %d, offset: %lld, nr_bytes: %lld, rqaddr: %lld\n", kernel_hook_type_str[type], trigger, offset, nr_bytes, rqaddr);
+    fprintf(stdout,"event type: %s, trigger type: %d, offset: %lld, nr_bytes: %lld, rqaddr: %lld, tid: %d, async_task_id: %d\n", kernel_hook_type_str[type], trigger, offset, nr_bytes, rqaddr, tid, async_task_id);
+  }
+  // const char *event_type_str = kernel_hook_type_str[e->event_type];
+  // const char *layer_type_str = info_type_str[e->info_type];
+  // fprintf(stdout,"event type: %s, layer type: %s\n", event_type_str, layer_type_str);
   return 0;
 }
 
@@ -221,7 +232,7 @@ int main(int argc, char **argv) {
   }
 
   /* Attach tracepoints */
-  err = iotrace_bpf::attach(skel);
+  // err = iotrace_bpf::attach(skel);
   if (err) {
     fprintf(stderr, "Failed to attach BPF skeleton\n");
     goto cleanup;
@@ -232,7 +243,7 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   /* Set up ring buffer polling */
-  rb_fd = bpf_map__fd(skel->maps.rb);
+  rb_fd = bpf_map__fd(qemu_uprobe_skel->maps.ringbuffer);
   rb = ring_buffer__new(rb_fd, handle_event, NULL, NULL);
   if (!rb) {
     err = -1;
@@ -259,6 +270,6 @@ cleanup:
   /* Clean up */
   ring_buffer__free(rb);
   iotrace_bpf::destroy(skel);
-  delete analyser;
+  // delete analyser;
   return err < 0 ? -err : 0;
 }

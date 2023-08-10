@@ -37,18 +37,18 @@ public:
     }
 
     event_pair_map.clear();
-    event_pair_map[iomap_dio_rw_enter] = iomap_dio_rw_exit;
-    event_pair_map[__cond_resched_enter] = __cond_resched_exit;
-    event_pair_map[vfs_read_enter] = vfs_read_exit;
-    event_pair_map[vfs_write_enter] = vfs_write_exit;
-    event_pair_map[filemap_get_pages_enter] = filemap_get_pages_exit;
-    event_pair_map[filemap_range_needs_writeback_enter] =
-        filemap_range_needs_writeback_exit;
-    event_pair_map[filemap_write_and_wait_range_enter] =
-        filemap_write_and_wait_range_exit;
-    // event_pair_map[block_plug] = block_unplug;
-    event_pair_map[block_bio_queue] = block_rq_issue;   // q2d
-    event_pair_map[block_rq_issue] = block_rq_complete; // d2c
+    // event_pair_map[iomap_dio_rw_enter] = iomap_dio_rw_exit;
+    // event_pair_map[__cond_resched_enter] = __cond_resched_exit;
+    // event_pair_map[vfs_read_enter] = vfs_read_exit;
+    // event_pair_map[vfs_write_enter] = vfs_write_exit;
+    // event_pair_map[filemap_get_pages_enter] = filemap_get_pages_exit;
+    // event_pair_map[filemap_range_needs_writeback_enter] =
+    //     filemap_range_needs_writeback_exit;
+    // event_pair_map[filemap_write_and_wait_range_enter] =
+    //     filemap_write_and_wait_range_exit;
+    // // event_pair_map[block_plug] = block_unplug;
+    // event_pair_map[block_bio_queue] = block_rq_issue;   // q2d
+    // event_pair_map[block_rq_issue] = block_rq_complete; // d2c
 
     // Create a thread to periodically call getAvgStatisticAndReset
     std::thread statistic_thread([this]() {
@@ -81,67 +81,44 @@ public:
     }
   }
 
-  void readAbsPath(unsigned long long inode, std::string &path,
-                   struct abs_path &abs_path) {
-    // get abs path from bpf map
-    struct iotrace_bpf *skel = config.skel;
-    path = "";
-    for (int level = 0; level < MAX_LEVEL; level++) {
-      if (abs_path.name[level][0] == '\0') {
-        continue;
-      }
-      // if(abs_path.name[level][0] == '/') {
-      //   path = abs_path.name[level];
-      //   continue;
-      // }else{
-      // path += "/";
-      // }
-      if (abs_path.has_root) {
-        path += "/";
-        path += abs_path.name[level];
-      }
-    }
-    // printf("abs path for inode %lld is %s\n", inode, path.c_str());
-  }
-
   void updateStatistic(enum kernel_hook_type curr_event,
                        unsigned long long curr_ts, unsigned long long prev_ts,
                        IORequest::requestType type) {
     // update statistic
-    switch (curr_event) {
-    // case iomap_dio_rw_exit:   // dio time
-    case vfs_read_exit: // sync read request time
-      read_request_time_sum += curr_ts - prev_ts;
-      read_request_count++;
-      break;
-    case vfs_write_exit: // sync write request time
-      write_request_time_sum += curr_ts - prev_ts;
-      write_request_count++;
-      break;
-    case filemap_get_pages_exit: // get page time
-      get_page_time_sum += curr_ts - prev_ts;
-      get_page_count++;
-      break;
-    case __cond_resched_exit: // offcpu time
-      if (type == IORequest::requestType::READ) {
-        read_offcpu_time_sum += curr_ts - prev_ts;
-        read_offcpu_count = read_request_count;
-      } else if (type == IORequest::requestType::WRITE) {
-        write_offcpu_time_sum += curr_ts - prev_ts;
-        write_offcpu_count = write_request_count;
-      }
-      break;
-    case block_rq_issue: // q2d
-      q2d_time_sum += curr_ts - prev_ts;
-      q2d_count++;
-      break;
-    case block_rq_complete: // d2c
-      d2c_time_sum += curr_ts - prev_ts;
-      d2c_count++;
-      break;
-    default:
-      break;
-    }
+    // switch (curr_event) {
+    // // case iomap_dio_rw_exit:   // dio time
+    // case vfs_read_exit: // sync read request time
+    //   read_request_time_sum += curr_ts - prev_ts;
+    //   read_request_count++;
+    //   break;
+    // case vfs_write_exit: // sync write request time
+    //   write_request_time_sum += curr_ts - prev_ts;
+    //   write_request_count++;
+    //   break;
+    // case filemap_get_pages_exit: // get page time
+    //   get_page_time_sum += curr_ts - prev_ts;
+    //   get_page_count++;
+    //   break;
+    // case __cond_resched_exit: // offcpu time
+    //   if (type == IORequest::requestType::READ) {
+    //     read_offcpu_time_sum += curr_ts - prev_ts;
+    //     read_offcpu_count = read_request_count;
+    //   } else if (type == IORequest::requestType::WRITE) {
+    //     write_offcpu_time_sum += curr_ts - prev_ts;
+    //     write_offcpu_count = write_request_count;
+    //   }
+    //   break;
+    // case block_rq_issue: // q2d
+    //   q2d_time_sum += curr_ts - prev_ts;
+    //   q2d_count++;
+    //   break;
+    // case block_rq_complete: // d2c
+    //   d2c_time_sum += curr_ts - prev_ts;
+    //   d2c_count++;
+    //   break;
+    // default:
+    //   break;
+    // }
   }
 
   void getAvgStatisticAndReset() {
@@ -290,25 +267,25 @@ public:
 
   bool processBioQueue2(unsigned long long bio,
                         struct bvec_array_info *bvec_info) {
-    if (bio_map.find(bio) == bio_map.end()) {
-      return false;
-    }
-    auto bio_object = bio_map[bio];
-    assert(bio_object->parent.get() == 0);
-    for (int i = 0; i < bvec_info->bvec_cnt; i++) {
-      auto inode = bvec_info->bvecs[i].inode;
-      auto offset =
-          (bvec_info->bvecs[i].index << 12) + bvec_info->bvecs[i].bv_offset;
-      auto len = bvec_info->bvecs[i].bv_len;
-      bio_object->addAssociation(inode, offset, len);
-      // printf("bio %lld bvec %d inode %lld offset %lld len %lld bvec cnt %d\n", bio,i ,inode,
-      //        offset, len,bvec_info->bvec_cnt);
-    }
+    // if (bio_map.find(bio) == bio_map.end()) {
+    //   return false;
+    // }
+    // auto bio_object = bio_map[bio];
+    // assert(bio_object->parent.get() == 0);
+    // for (int i = 0; i < bvec_info->bvec_cnt; i++) {
+    //   auto inode = bvec_info->bvecs[i].inode;
+    //   auto offset =
+    //       (bvec_info->bvecs[i].index << 12) + bvec_info->bvecs[i].bv_offset;
+    //   auto len = bvec_info->bvecs[i].bv_len;
+    //   bio_object->addAssociation(inode, offset, len);
+    //   // printf("bio %lld bvec %d inode %lld offset %lld len %lld bvec cnt %d\n", bio,i ,inode,
+    //   //        offset, len,bvec_info->bvec_cnt);
+    // }
     
     // add bio to relative request
-    for (auto &io_request : pending_requests) {
-      io_request->AddBioObjectAndBuildMapping(bio_object, io_request);
-    }
+    // for (auto &io_request : pending_requests) {
+    //   io_request->AddBioObjectAndBuildMapping(bio_object, io_request);
+    // }
     return true;
   }
 
