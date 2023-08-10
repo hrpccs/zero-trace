@@ -13,7 +13,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
-// #define DEBUG 1
+#define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -128,9 +128,12 @@ static int inline get_and_filter_pid(pid_t *tgid, pid_t *tid) {
 
 static int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
                                 ino_t *inode, dev_t *devp, ino_t *dir_inodep) {
-  *inode = BPF_CORE_READ(iinode, i_ino);
-  if (filter_config.inode != 0 && filter_config.inode != *inode) {
-    return 1;
+  if (filter_config.inode != 0) {
+    ino_t ino = BPF_CORE_READ(iinode, i_ino);
+    if(filter_config.inode != ino) {
+      return 1;
+    }
+    *inode = ino;
   }
   if (filter_config.dev != 0) {
     dev_t dev = BPF_CORE_READ(iinode, i_sb, s_dev);
@@ -159,43 +162,24 @@ static int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
 static int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *inodep,
                                                         dev_t *devp,
                                                         ino_t *dir_inodep) {
-  int *fd_ref = bpf_map_lookup_elem(&fd_ref_map, &fd);
   int ret = 0;
   ino_t inode = 0;
   dev_t dev = 0;
   ino_t dir_inode = 0;
-  if (fd_ref == NULL) {
-    if (filter_config.dev != 0 || filter_config.inode != 0 ||
-        filter_config.directory_inode != 0) {
-      // if fd has been filtered, return 1
-      int *fd_filted = bpf_map_lookup_elem(&fd_filted_map, &fd);
-      if (fd_filted != NULL) {
-        return 1;
-      }
-    }
+  struct task_struct *task = bpf_get_current_task_btf();
+  struct files_struct *files = task->files;
+  struct fdtable *fdt;
+  struct file **fdd;
+  struct file *file;
+  fdt = files->fdt;
+  fdd = fdt->fd;
+  bpf_core_read(&file, sizeof(struct file *), fdd + fd);
+  struct inode *iinode = BPF_CORE_READ(file, f_inode);
+  // filter and update filterd fd map
+  ret = filter_inode_dev_dir(iinode, file, &inode, &dev, &dir_inode);
 
-    struct task_struct *task = bpf_get_current_task_btf();
-    struct files_struct *files = task->files;
-    struct fdtable *fdt;
-    struct file **fdd;
-    struct file *file;
-    fdt = files->fdt;
-    fdd = fdt->fd;
-    bpf_core_read(&file, sizeof(struct file *), fdd + fd);
-    struct inode *iinode = BPF_CORE_READ(file, f_inode);
-    // filter and update filterd fd map
-    ret = filter_inode_dev_dir(iinode, file, &inode, &dev, &dir_inode);
-    if (ret) {
-      bpf_map_update_elem(&fd_filted_map, &fd, &fd, BPF_ANY);
-      return 1;
-    }
-
-    // update inode_ref_map
-    int *inode_ref = bpf_map_lookup_elem(&inode_ref_map, &inode);
-    if (inode_ref == NULL) {
-      bpf_map_update_elem(&inode_ref_map, &inode, &fd, BPF_ANY);
-    }
-    bpf_map_update_elem(&fd_ref_map, &fd, &inode, BPF_ANY);
+  if(ret){
+    return 1;
   }
   if (inodep != NULL)
     *inodep = inode;
@@ -203,7 +187,6 @@ static int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *in
     *devp = dev;
   if (dir_inodep != NULL)
     *dir_inodep = dir_inode;
-
   return 0;
 }
 
@@ -285,7 +268,7 @@ int BPF_KRETPROBE(trace_read_ret, int ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("read exit without enter\n");
+    // bpf_debug("read exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -361,7 +344,7 @@ int BPF_KRETPROBE(write_ret,int ret) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("write exit without enter\n");
+    // bpf_debug("write exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -433,7 +416,7 @@ int BPF_KRETPROBE(readv_ret,int ret) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("readv exit without enter\n");
+    // bpf_debug("readv exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -512,7 +495,7 @@ int BPF_KRETPROBE(writev_ret,int ret) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("writev exit without enter\n");
+    // bpf_debug("writev exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -590,7 +573,7 @@ int BPF_KRETPROBE(pread64_ret, int ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("pread64 exit without enter\n");
+    // bpf_debug("pread64 exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -669,7 +652,7 @@ int BPF_KRETPROBE(pwrite64_ret, int ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("pwrite64 exit without enter\n");
+    // bpf_debug("pwrite64 exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -747,7 +730,7 @@ int BPF_KRETPROBE(preadv_ret, int ret){
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("preadv exit without enter\n");
+    // bpf_debug("preadv exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -827,7 +810,7 @@ int BPF_KRETPROBE(pwritev_ret,int ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("pwritev exit without enter\n");
+    // bpf_debug("pwritev exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -908,7 +891,7 @@ int BPF_KRETPROBE(fsync_ret,int ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("fsync exit without enter\n");
+    // bpf_debug("fsync exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -989,7 +972,7 @@ int BPF_KRETPROBE(fdatasync_ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("fdatasync exit without enter\n");
+    // bpf_debug("fdatasync exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -1064,7 +1047,7 @@ int BPF_KRETPROBE(sync_file_range_ret) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("sync_file_range exit without enter\n");
+    // bpf_debug("sync_file_range exit without enter\n");
     return 0;
   }
   bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
@@ -1126,7 +1109,7 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("do_iter_read enter without enter\n");
+    // bpf_debug("do_iter_read enter without enter\n");
     return 0;
   } 
   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -1168,7 +1151,7 @@ int BPF_PROG(trace_do_iter_read_exit, struct file *file) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("do_iter_read exit without enter\n");
+    // bpf_debug("do_iter_read exit without enter\n");
     return 0;
   }
 
@@ -1197,7 +1180,7 @@ int BPF_PROG(trace_do_iter_write, struct file *file, struct iov_iter *iter) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("do_iter_write enter without enter\n");
+    // bpf_debug("do_iter_write enter without enter\n");
     return 0;
   }
   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -1240,7 +1223,7 @@ int BPF_PROG(trace_do_iter_write_exit, struct file *file) {
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("do_iter_write exit without enter\n");
+    // bpf_debug("do_iter_write exit without enter\n");
     return 0;
   }
   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -1271,7 +1254,7 @@ int BPF_PROG(trace_vfs_iocb_iter_write, struct file *file, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_iocb_iter_write enter without enter\n");
+    // bpf_debug("vfs_iocb_iter_write enter without enter\n");
     return 0;
   }
 
@@ -1315,7 +1298,7 @@ int BPF_PROG(trace_vfs_iocb_iter_write_exit, struct file *file,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_iocb_iter_write exit without enter\n");
+    // bpf_debug("vfs_iocb_iter_write exit without enter\n");
     return 0;
   }
 
@@ -1347,7 +1330,7 @@ int BPF_PROG(trace_vfs_iocb_iter_read, struct file *file, struct kiocb *iocb,
   }
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_iocb_iter_read enter without enter\n");
+    // bpf_debug("vfs_iocb_iter_read enter without enter\n");
     return 0;
   }
   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -1389,7 +1372,7 @@ int BPF_PROG(trace_vfs_iocb_iter_read_exit, struct file *file,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_iocb_iter_read exit without enter\n");
+    // bpf_debug("vfs_iocb_iter_read exit without enter\n");
     return 0;
   }
 
@@ -1421,7 +1404,7 @@ int BPF_PROG(trace_vfs_read, struct file *file, char *buf, size_t count) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_read enter without enter\n");
+    // bpf_debug("vfs_read enter without enter\n");
     return 0;
   }
 
@@ -1467,7 +1450,7 @@ int BPF_PROG(trace_vfs_read_exit, struct file *file, char *buf, size_t count) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_read exit without enter\n");
+    // bpf_debug("vfs_read exit without enter\n");
     return 0;
   }
 
@@ -1499,7 +1482,7 @@ int BPF_PROG(trace_vfs_write, struct file *file, char *buf, size_t count) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_write enter without enter\n");
+    // bpf_debug("vfs_write enter without enter\n");
     return 0;
   }
 
@@ -1546,7 +1529,7 @@ int BPF_PROG(trace_vfs_write_exit, struct file *file, char *buf, size_t count) {
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_write exit without enter\n");
+    // bpf_debug("vfs_write exit without enter\n");
     return 0;
   }
 
@@ -1578,7 +1561,7 @@ int BPF_PROG(trace_vfs_fsync_range, struct file *file, loff_t start, loff_t end,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("vfs_fsync_range enter without enter\n");
+    // bpf_debug("vfs_fsync_range enter without enter\n");
     return 0;
   }
 
@@ -1620,7 +1603,7 @@ int BPF_PROG(trace_generic_file_read_iter, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("generic_file_read_iter enter without enter\n");
+    // bpf_debug("generic_file_read_iter enter without enter\n");
     return 0;
   }
 
@@ -1666,7 +1649,7 @@ int BPF_PROG(trace_generic_file_read_iter_exit, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("generic_file_read_iter exit without enter\n");
+    // bpf_debug("generic_file_read_iter exit without enter\n");
     return 0;
   }
 
@@ -1699,7 +1682,7 @@ int BPF_PROG(trace_generic_file_write_iter, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("generic_file_write_iter enter without enter\n");
+    // bpf_debug("generic_file_write_iter enter without enter\n");
     return 0;
   }
 
@@ -1744,7 +1727,7 @@ int BPF_PROG(trace_generic_file_write_iter_exit, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("generic_file_write_iter exit without enter\n");
+    // bpf_debug("generic_file_write_iter exit without enter\n");
     return 0;
   }
 
@@ -1824,7 +1807,7 @@ int BPF_PROG(trace_filemap_get_pages_exit, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("filemap_get_pages exit without enter\n");
+    // bpf_debug("filemap_get_pages exit without enter\n");
     return 0;
   }
 
@@ -1857,7 +1840,7 @@ int BPF_PROG(trace_file_write_and_wait_range, struct file *file, loff_t start,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("file_write_and_wait_range enter without enter\n");
+    // bpf_debug("file_write_and_wait_range enter without enter\n");
     return 0;
   }
 
@@ -1901,7 +1884,7 @@ int BPF_PROG(trace_file_write_and_wait_range_exit, struct file *file,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("file_write_and_wait_range exit without enter\n");
+    // bpf_debug("file_write_and_wait_range exit without enter\n");
     return 0;
   }
 
@@ -1936,7 +1919,7 @@ int BPF_PROG(trace_enter_iomap_dio_rw, struct kiocb *iocb,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("iomap_dio_rw enter without enter\n");
+    // bpf_debug("iomap_dio_rw enter without enter\n");
     return 0;
   }
 
@@ -1982,7 +1965,7 @@ int BPF_PROG(trace_exit_iomap_dio_rw, struct kiocb *iocb, struct iov_iter *iter,
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
-    bpf_debug("iomap_dio_rw exit without enter\n");
+    // bpf_debug("iomap_dio_rw exit without enter\n");
     return 0;
   }
 
@@ -2020,11 +2003,15 @@ int handle_tp_sched_1(struct bpf_raw_tracepoint_args *ctx) {
   if (!sched_enable) {
     return 0;
   }
-  struct task_struct *prev = (struct task_struct *)(ctx->args[0]);
-  struct task_struct *next = (struct task_struct *)(ctx->args[1]);
+  struct task_struct *prev = (struct task_struct *)(ctx->args[1]);
+  struct task_struct *next = (struct task_struct *)(ctx->args[2]);
   pid_t prev_tid = BPF_CORE_READ(prev, pid);
   pid_t next_tid = BPF_CORE_READ(next, pid);
 
+  if (prev_tid == next_tid) {
+    return 0;
+  }
+  
   int* prev_tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &prev_tid);
   if(prev_tid_syscall_enter != NULL){
     struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
