@@ -23,6 +23,7 @@
   X(syscall__pwritev)                                                          \
   X(syscall__fsync)                                                            \
   X(syscall__fdatasync)                                                        \
+  X(syscall__sync_file_range)                                                  \
   X(fs__do_iter_read)                                                          \
   X(fs__do_iter_write)                                                         \
   X(fs__vfs_iocb_iter_write)                                                   \

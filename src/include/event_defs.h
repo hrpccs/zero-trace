@@ -7,8 +7,7 @@
 #define MAXLEN_VMA_NAME 64
 #define MAX_LEVEL 8
 
-
-enum rq_type{
+enum rq_type {
   RQ_TYPE_READ = 0,
   RQ_TYPE_WRITE = 1,
   RQ_TYPE_FLUSH = 2,
@@ -35,13 +34,29 @@ struct event {
       int nr_bytes;
       int prev_tid;
     } qemu_layer_info;
+
     struct {
-      unsigned long dev;
-      unsigned long long inode;
-      unsigned long long dir_inode;
-      unsigned long file_offset;
-      unsigned long file_bytes;
-    } vfs_layer_info;
+      int tid;
+      int tgid;
+      union {
+        struct {
+          unsigned long dev;
+          unsigned long long inode;
+          unsigned long long dir_inode;
+          int fd;
+        };
+        struct {
+          int ret;
+        };
+      };
+    } syscall_layer_info;
+
+    struct {
+      int tid;
+      int tgid;
+      unsigned long offset;
+      unsigned long bytes;
+    } fs_layer_info;
     struct {
       unsigned long long bio;
       unsigned long long parent_bio;

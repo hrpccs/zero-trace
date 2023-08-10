@@ -232,7 +232,7 @@ int main(int argc, char **argv) {
   }
 
   /* Attach tracepoints */
-  // err = iotrace_bpf::attach(skel);
+  err = iotrace_bpf::attach(skel);
   if (err) {
     fprintf(stderr, "Failed to attach BPF skeleton\n");
     goto cleanup;

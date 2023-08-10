@@ -63,7 +63,7 @@ struct {
 } ringbuffer SEC(".maps");
 
 
-struct filter_config filter_config = {
+volatile struct filter_config filter_config = {
     .tgid = 0,
     .tid = 0,
     .inode = 0,
@@ -74,17 +74,17 @@ struct filter_config filter_config = {
     .cgroup_id = 0,
 };
 
-short qemu_enable = 1;    // 必需加上至少进程级的过滤
-short syscall_enable = 1; // 必需加上至少进程级的过滤
-short vfs_enable = 1;     // 必需加上至少进程级的过滤
-short block_enable = 1;
-short scsi_enable = 1;
-short nvme_enable = 1;
-short ext4_enable = 1;
-short filemap_enable = 1;
-short iomap_enable = 1;
-short sched_enable = 0;
-short virtio_enable = 1;
+volatile short qemu_enable = 0;    // 必需加上至少进程级的过滤
+volatile short syscall_enable = 1; // 必需加上至少进程级的过滤
+volatile short vfs_enable = 1;     // 必需加上至少进程级的过滤
+volatile short block_enable = 1;
+volatile short scsi_enable = 1;
+volatile short nvme_enable = 1;
+volatile short ext4_enable = 1;
+volatile short filemap_enable = 1;
+volatile short iomap_enable = 1;
+volatile short sched_enable = 0;
+volatile short virtio_enable = 1;
 
 
 long long dropped __attribute__((aligned(128))) = 0;
@@ -208,40 +208,69 @@ static int inline update_fd_inode_map_and_filter_dev_inode_dir(int fd, ino_t *in
   return 0;
 }
 
-// struct {
 
-// } 
+// 如果存在用户态追踪的话，可以辅助过滤系统调用
+// 目前对 QEMU 支持较好，因为 QEMU 对磁盘的维护只用到对指定文件偏移的读写
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, int);
+	__type(value, long long);
+	__uint(max_entries, 1024);
+    __uint(pinning, LIBBPF_PIN_BY_NAME); // 不同文件的 rb 会共享成一个
+} tid_offset_map SEC(".maps"); 
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, int);
+  __type(value, int);
+  __uint(max_entries, 1024);
+} tid_syscall_enter_map SEC(".maps");
+
 
 /* read_write syscall  read_write.c */
 // read_enter/exit
 SEC("ksyscall/read")
-int BPF_KPROBE_SYSCALL(read, int fd, void *buf, size_t count) {
+int BPF_KPROBE_SYSCALL(trace_read, int fd, void *buf, size_t count) {
   if (!syscall_enable) {
     return 0;
   }
-
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
+    bpf_debug("qemu untracked read enter\n");
+    return 0;
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
-  // TODO:
-  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
-  if (e) {
-    bpf_debug("submit event iotrace\n");
-    e->event_type = syscall__read;
-    e->info_type = syscall_layer;
-    bpf_ringbuf_submit(e, 0);
-  }
 
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__read;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
   bpf_debug("syscall read enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
+
 SEC("kretsyscall/read")
-int BPF_KPROBE_SYSCALL(read_ret) {
+int BPF_KRETPROBE(trace_read_ret, int ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -249,6 +278,30 @@ int BPF_KPROBE_SYSCALL(read_ret) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+
+  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
+    bpf_debug("qemu untracked read exit\n");
+    return 0;
+  }
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("read exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__read;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);  
   bpf_debug("syscall read exit\n");
   return 0;
 }
@@ -256,7 +309,81 @@ int BPF_KPROBE_SYSCALL(read_ret) {
 
 // wirte_enter/exit
 SEC("ksyscall/write")
-int BPF_KPROBE_SYSCALL(write, int fd, void *buf, size_t count) {
+int BPF_KSYSCALL(write, int fd, void *buf, size_t count) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
+    bpf_debug("qemu untracked write enter\n");
+    return 0;
+  }
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
+  if (ret) {
+    return 0;
+  }
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__write;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("syscall write enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  return 0;
+}
+SEC("kretsyscall/write")
+int BPF_KRETPROBE(write_ret,int ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
+    bpf_debug("qemu untracked write exit\n");
+    return 0;
+  }
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("write exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__write;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("syscall write exit\n");
+  return 0;
+}
+// readv_enter/exit
+SEC("ksyscall/readv")
+int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
   if (!syscall_enable) {
     return 0;
   }
@@ -265,23 +392,145 @@ int BPF_KPROBE_SYSCALL(write, int fd, void *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
-  bpf_debug("syscall write enter: fd %d buf %lx count %lu\n", fd, buf, count);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__readv;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("syscall readv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
   return 0;
 }
-SEC("kretsyscall/write")
-int BPF_KPROBE_SYSCALL(write_ret) {
+SEC("kretsyscall/readv")
+int BPF_KRETPROBE(readv_ret,int ret) {
   if (!syscall_enable) {
+    return 0;
+  }
+
+  if(qemu_enable){
+    bpf_debug("qemu untracked readv exit\n");
     return 0;
   }
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  bpf_debug("syscall write exit\n");
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("readv exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__readv;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
+
+  bpf_debug("syscall readv exit\n");
+  return 0;
+}
+
+// writev_enter/exit
+SEC("ksyscall/writev")
+int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  if(qemu_enable){
+    bpf_debug("qemu untracked writev enter\n");
+    return 0;
+  }
+
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
+  if (ret) {
+    return 0;
+  }
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__writev;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("syscall writev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
+  return 0;
+}
+SEC("kretsyscall/writev")
+int BPF_KRETPROBE(writev_ret,int ret) {
+  if (!syscall_enable) {
+    return 0;
+  }
+  if(qemu_enable){
+    bpf_debug("qemu untracked writev exit\n");
+    return 0;
+  }
+  pid_t tgid, tid;
+  if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("writev exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__writev;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
+  bpf_debug("syscall writev exit\n");
   return 0;
 }
 // pread64_enter/exit
@@ -297,16 +546,42 @@ int BPF_KPROBE_SYSCALL(pread64, int fd, void *buf, size_t count,
     return 0;
   }
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  if(qemu_enable){ // check offset
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || offset != *offset_ref){
+      bpf_debug("qemu untracked pread64 enter %lx\n", offset);
+      return 0;
+    }
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
-
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__pread64;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pread64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
   return 0;
 }
 SEC("kretsyscall/pread64")
-int BPF_KPROBE_SYSCALL(pread64_ret) {
+int BPF_KRETPROBE(pread64_ret, int ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -315,6 +590,24 @@ int BPF_KPROBE_SYSCALL(pread64_ret) {
     return 0;
   }
 
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("pread64 exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__pread64;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pread64 exit\n");
   return 0;
 }
@@ -330,17 +623,44 @@ int BPF_KPROBE_SYSCALL(pwrite64, int fd, void *buf, size_t count,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  if(qemu_enable){
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || offset != *offset_ref){
+      bpf_debug("qemu untracked pwrite64 enter %lx\n", offset);
+      return 0;
+    }
+  }
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
 
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__pwrite64;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pwrite64 enter: fd %d count %lu offset %lu\n", fd, count, offset);
   return 0;
 }
 SEC("kretsyscall/pwrite64")
-int BPF_KPROBE_SYSCALL(pwrite64_ret) {
+int BPF_KRETPROBE(pwrite64_ret, int ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -349,77 +669,30 @@ int BPF_KPROBE_SYSCALL(pwrite64_ret) {
     return 0;
   }
 
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("pwrite64 exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__pwrite64;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pwrite64 exit\n");
-  return 0;
-}
-// readv_enter/exit
-SEC("ksyscall/readv")
-int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
-  if (!syscall_enable) {
-    return 0;
-  }
-
-  pid_t tgid, tid;
-  if (get_and_filter_pid(&tgid, &tid)) {
-    return 0;
-  }
-
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
-  if (ret) {
-    return 0;
-  }
-  bpf_debug("syscall readv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
-  return 0;
-}
-SEC("kretsyscall/readv")
-int BPF_KPROBE_SYSCALL(readv_ret) {
-  if (!syscall_enable) {
-    return 0;
-  }
-  pid_t tgid, tid;
-  if (get_and_filter_pid(&tgid, &tid)) {
-    return 0;
-  }
-  bpf_debug("syscall readv exit\n");
-  return 0;
-}
-
-// writev_enter/exit
-SEC("ksyscall/writev")
-int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
-  if (!syscall_enable) {
-    return 0;
-  }
-
-  pid_t tgid, tid;
-  if (get_and_filter_pid(&tgid, &tid)) {
-    return 0;
-  }
-
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
-  if (ret) {
-    return 0;
-  }
-  bpf_debug("syscall writev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
-  return 0;
-}
-SEC("kretsyscall/writev")
-int BPF_KPROBE_SYSCALL(writev_ret) {
-  if (!syscall_enable) {
-    return 0;
-  }
-  pid_t tgid, tid;
-  if (get_and_filter_pid(&tgid, &tid)) {
-    return 0;
-  }
-  bpf_debug("syscall writev exit\n");
   return 0;
 }
 // preadv_enter/exit
 SEC("ksyscall/preadv")
-int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen,
-                       loff_t offset) {
-
+int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen, long long offset) {
   if (!syscall_enable) {
     return 0;
   }
@@ -428,16 +701,44 @@ int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen,
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  if(qemu_enable){
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || offset != *offset_ref){
+      bpf_debug("qemu untracked preadv enter %lx\n", offset);
+      return 0;
+    }
+  }
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
+
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__preadv;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
+
   bpf_debug("syscall preadv enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
   return 0;
 }
 SEC("kretsyscall/preadv")
-int BPF_KPROBE_SYSCALL(preadv_ret) {
+int BPF_KRETPROBE(preadv_ret, int ret){
   if (!syscall_enable) {
     return 0;
   }
@@ -445,6 +746,25 @@ int BPF_KPROBE_SYSCALL(preadv_ret) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("preadv exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__preadv;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall preadv exit\n");
   return 0;
 }
@@ -461,15 +781,44 @@ int BPF_KPROBE_SYSCALL(pwritev, int fd, struct iovec *vec, unsigned long vlen,
     return 0;
   }
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  if(qemu_enable){
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || offset != *offset_ref){
+      bpf_debug("qemu untracked pwritev enter %lx\n", offset);
+      return 0;
+    }
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
+
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__pwritev;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pwritev enter: fd %d vec %lx vlen %lu\n", fd, vec, vlen);
   return 0;
 }
 SEC("kretsyscall/pwritev")
-int BPF_KPROBE_SYSCALL(pwritev_ret) {
+int BPF_KRETPROBE(pwritev_ret,int ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -477,6 +826,25 @@ int BPF_KPROBE_SYSCALL(pwritev_ret) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("pwritev exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__pwritev;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall pwritev exit\n");
   return 0;
 }
@@ -494,15 +862,44 @@ int BPF_KPROBE_SYSCALL(fsync, int fd) {
     return 0;
   }
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  if(qemu_enable){
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || *offset_ref != -RQ_TYPE_FLUSH ){
+      bpf_debug("qemu untracked fsync enter\n");
+      return 0;
+    }
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
+
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__fsync;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall fsync enter: fd %d\n", fd);
   return 0;
 }
 SEC("kretsyscall/fsync")
-int BPF_KPROBE_SYSCALL(fsync_ret) {
+int BPF_KRETPROBE(fsync_ret,int ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -510,6 +907,25 @@ int BPF_KPROBE_SYSCALL(fsync_ret) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("fsync exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__fsync;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.ret = ret;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall fsync exit\n");
   return 0;
 }
@@ -526,15 +942,45 @@ int BPF_KPROBE_SYSCALL(fdatasync, int fd) {
     return 0;
   }
 
-  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
+  if(qemu_enable){
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL || *offset_ref != -RQ_TYPE_FLUSH ){
+      bpf_debug("qemu untracked fsync enter\n");
+      return 0;
+    }
+  }
+
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
+
+  int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, &inode, &dev, &dir_inode);
   if (ret) {
     return 0;
   }
+
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__fdatasync;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  e->syscall_layer_info.inode = inode;
+  e->syscall_layer_info.dir_inode = dir_inode;
+  e->syscall_layer_info.dev = dev;
+  bpf_ringbuf_submit(e, 0);
+
   bpf_debug("syscall fdatasync enter: fd %d\n", fd);
   return 0;
 }
 SEC("kretsyscall/fdatasync")
-int BPF_KPROBE_SYSCALL(fdatasync_ret) {
+int BPF_KRETPROBE(fdatasync_ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -543,6 +989,23 @@ int BPF_KPROBE_SYSCALL(fdatasync_ret) {
     return 0;
   }
 
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("fdatasync exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__fdatasync;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall fdatasync exit\n");
   return 0;
 }
@@ -554,21 +1017,44 @@ int BPF_KPROBE_SYSCALL(sync_file_range, int fd, loff_t offset, loff_t nbytes,
   if (!syscall_enable) {
     return 0;
   }
+
+  if(qemu_enable){
+    bpf_debug("qemu untracked sync_file_range enter\n");
+    return 0;
+  }
+
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  ino_t inode = 0;
+  ino_t dir_inode = 0;
+  dev_t dev = 0;
 
   int ret = update_fd_inode_map_and_filter_dev_inode_dir(fd, NULL, NULL, NULL);
   if (ret) {
     return 0;
   }
+
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if (!e) {
+    return 0;
+  }
+  bpf_map_update_elem(&tid_syscall_enter_map, &tid, &tid, BPF_ANY);
+  e->event_type = syscall__sync_file_range;
+  e->info_type = syscall_layer;
+  e->trigger_type = ENTRY;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  e->syscall_layer_info.fd  = fd;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall sync_file_range enter: fd %d offset %lu nbytes %lu \n", fd,
              offset, nbytes);
   return 0;
 }
 SEC("kretsyscall/sync_file_range")
-int BPF_KPROBE_SYSCALL(sync_file_range_ret) {
+int BPF_KRETPROBE(sync_file_range_ret) {
   if (!syscall_enable) {
     return 0;
   }
@@ -578,6 +1064,23 @@ int BPF_KPROBE_SYSCALL(sync_file_range_ret) {
     return 0;
   }
 
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("sync_file_range exit without enter\n");
+    return 0;
+  }
+  bpf_map_delete_elem(&tid_syscall_enter_map, &tid);
+  struct event * e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = syscall__sync_file_range;
+  e->info_type = syscall_layer;
+  e->trigger_type = EXIT;
+  e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   bpf_debug("syscall sync_file_range exit\n");
   return 0;
 }
@@ -612,6 +1115,11 @@ int BPF_PROG(trace_do_iter_read, struct file *file, struct iov_iter *iter) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("do_iter_read enter without enter\n");
+    return 0;
+  } 
   ino_t ino = file->f_inode->i_ino;
   if (vfs_filter_inode(ino)) {
     return 0;
