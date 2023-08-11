@@ -51,5 +51,5 @@ unsigned long long get_device_id(const char* path){
   if (stat(path, &buf) < 0) {
     return 0;
   }
-  return buf.st_dev;
+  return buf.st_rdev;
 }

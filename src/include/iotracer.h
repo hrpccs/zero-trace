@@ -36,6 +36,7 @@ struct TraceConfig {
     time_threshold = 10;
     timer_trigger_duration = 0;
   }
+
   TraceConfig(TraceConfig &&config) {
     qemu_enable = config.qemu_enable;
     syscall_enable = config.syscall_enable;
@@ -232,7 +233,7 @@ public:
     }
     while (!exiting) {
       err = ring_buffer__poll(rb, 100);
-      if (err != 0) {
+      if (err < 0) {
         fprintf(stderr, "Failed to consume ring buffer\n");
         exit(1);
       }
@@ -350,7 +351,7 @@ public:
     }
     while (!exiting) {
       err = ring_buffer__poll(rb, 100);
-      if (err != 0) {
+      if (err < 0) {
         fprintf(stderr, "Failed to consume ring buffer\n");
         exit(1);
       }
@@ -386,15 +387,9 @@ public:
 
   void stopTracing() { exiting = true; }
 
-  void HandleSyscallEvent(void *data);
-  void HandleFsEvent(void *data);
+
   void HandleBlockEvent(struct event *data);
-  void HandleScsiEvent(void *data);
-  void HandleNvmeEvent(void *data);
-  void HandleFilemapEvent(void *data);
-  void HandleIomapEvent(void *data);
-  void HandleSchedEvent(void *data);
-  void HandleVirtioEvent(void *data);
+ 
 
   bool exiting;
   struct iotrace_bpf *skel;

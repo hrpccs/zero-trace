@@ -5,7 +5,7 @@
 #include "event_defs.h"
 #include "hook_point.h"
 #include "iotrace.skel.h"
-#include "kernel_tracer.h"
+#include "iotracer.h"
 #include "qemu_uprobe.skel.h"
 #include "log.h"
 #include <argp.h>
@@ -115,5 +115,6 @@ int main(int argc, char **argv) {
   tracer->startCoworker();
   tracer->openBPF();
   tracer->configAndLoadBPF();
+  tracer->startTracing(tracer);
   // tracer->startDebug();
 }

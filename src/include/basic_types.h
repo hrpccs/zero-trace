@@ -74,15 +74,18 @@ public:
   }
 
   void setQemuInfo(struct event* e){
+    isQemuRq = true;
     qemu_tid = e->qemu_layer_info.tid;
     virtblk_guest_offset = e->qemu_layer_info.offset;
     virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
   }
 
   void setVirtioRange(unsigned long sector,unsigned int nr_bytes){
-    this->virtio_host_offset = sector<<9;
-    this->virtio_nr_bytes = nr_bytes;
+    this->isVirtIO = true;
+    this->driver_rq_offset = sector<<9;
+    this->driver_rq_nr_bytes = nr_bytes;
   }
+
   unsigned long long id;
   std::vector<std::unique_ptr<Event>> events;
   int syscall_tid,syscall_pid;
@@ -91,18 +94,22 @@ public:
   int syscall_ret;
   unsigned long syscall_offset;
   unsigned int syscall_bytes;
-  bool hasIO = false;
+  bool isVirtIO = false;
+  unsigned long driver_rq_offset;
+  unsigned long driver_rq_nr_bytes;
 
-
-  // host info
+  // just for qemu 
+  bool isQemuRq = false;
   int qemu_tid;
+  // to match guest's dirver_rq_offset
   unsigned long virtblk_guest_offset;
   unsigned int virtblk_nr_bytes;
-  unsigned long virtio_host_offset;
-  unsigned int virtio_nr_bytes;
+  unsigned long host_syscall_offset;
+  unsigned int host_syscall_nr_bytes;
 
   // for statistics
   struct BioStatistic {
+    bool done = false;
     bool bio_is_throttled = false;
     bool bio_is_bounce = false;
     unsigned long long bio_queue_time = 0;
@@ -115,10 +122,6 @@ public:
   unsigned long long end_time;
   std::vector<BioStatistic> bio_statistics;
 
-  std::tm start_tm;
   // store real time
-
-
-  
-
+  std::tm start_tm;
 };

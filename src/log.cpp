@@ -1,7 +1,7 @@
 #include "log.h"
 #include "basic_types.h"
 #include "hook_point.h"
-#include "kernel_tracer.h"
+#include "iotracer.h"
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -16,6 +16,7 @@ void FileLogHandler::HandleDoneRequest(std::shared_ptr<Request> req,
   estimated_avg_time = 0.9 * estimated_avg_time + 0.1 * ms;
   if (ms < config.time_threshold) {
     this->total_requests++;
+    return;
   }
   unsigned long long base_time = req->start_time;
   // print out basic info

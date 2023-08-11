@@ -1,4 +1,4 @@
-#include "kernel_tracer.h"
+#include "iotracer.h"
 #include "basic_types.h"
 #include "event_defs.h"
 #include "hook_point.h"
@@ -7,15 +7,15 @@
 #include <ctime>
 #include <memory>
 
-
-
 void IOTracer::HandleBlockEvent(struct event *e) {
   if (e->event_type == kernel_hook_type::block__bio_queue) {
     int tid = e->block_layer_info.tid;
     int pid = e->block_layer_info.tgid;
     int bio_id = e->block_layer_info.bio_id;
     auto krq = requests[tid];
-    assert(krq != nullptr);
+    if(krq == nullptr){
+      return;
+    }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
     bio_requests[bio_id] = krq;
@@ -28,9 +28,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
       rq_requests[rq_id] = krq;
-    } else {
-      assert(false);
-    }
+    } 
   } else if (e->event_type == kernel_hook_type::block__bio_done) {
     int bio_id = e->block_layer_info.bio_id;
     auto it = bio_requests.find(bio_id);
@@ -39,9 +37,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
       bio_requests.erase(it);
-    } else {
-      assert(false);
-    }
+    } 
   } else if (e->event_type == kernel_hook_type::block__rq_done) {
     int rq_id = e->block_layer_info.rq_id;
     auto it = rq_requests.find(rq_id);
@@ -50,9 +46,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
       rq_requests.erase(it);
-    } else {
-      assert(false);
-    }
+    } 
   } else if (e->event_type == kernel_hook_type::block__bio_bounce ||
              e->event_type == kernel_hook_type::block__bio_throttle ||
              e->event_type == kernel_hook_type::block__bio_bounce) {
@@ -62,8 +56,6 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto krq = it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
-    } else {
-      assert(false);
     }
   } else if (e->event_type == kernel_hook_type::block__rq_insert ||
              e->event_type == kernel_hook_type::block__rq_issue ||
@@ -74,15 +66,14 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto krq = it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
-    } else {
-      assert(false);
-    }
+    } 
   }else{
     assert(false);
   }
 }
 
   void IOTracer::AddEvent(void *data, size_t data_size) {
+  // debug(NULL,data,0);
     if (data_size != sizeof(struct event)) {
       return;
     }
@@ -94,6 +85,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       if (e->trigger_type == trigger_type::ENTRY) {
         auto krq = std::make_shared<Request>();
         krq->setSyscallInfo(e);
+        krq->start_time = e->timestamp;
         requests[tid] = krq;
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
@@ -105,11 +97,10 @@ void IOTracer::HandleBlockEvent(struct event *e) {
           auto event = std::unique_ptr<Event>(new Event(e));
           krq->addEvent(std::move(event));
           krq->setRet(ret);
+          krq->end_time = e->timestamp;
           HandleDoneRequest(krq);
           requests.erase(it);
-        } else {
-          assert(false);
-        }
+        } 
       } else {
         assert(false);
       }
@@ -119,7 +110,9 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       int tid = e->fs_layer_info.tid;
       int pid = e->fs_layer_info.tgid;
       auto krq = requests[tid];
-      assert(krq != nullptr);
+      if(krq == nullptr){
+        break;
+      }
       if (e->trigger_type != trigger_type::EXIT) {
         unsigned long offset = e->fs_layer_info.offset;
         unsigned long bytes = e->fs_layer_info.bytes;
@@ -141,20 +134,16 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       if (it != requests.end()) {
         auto krq =it->second;
         auto event = std::unique_ptr<Event>(new Event(e));
-        event->trigger_type = trigger_type::EXIT;
+        event->trigger_type = trigger_type::ENTRY;
         krq->addEvent(std::move(event));
-      } else {
-        assert(false);
       }
 
       it = requests.find(next_tid);
       if (it != requests.end()) {
         auto krq = it->second;
         auto event = std::unique_ptr<Event>(new Event(e));
-        event->trigger_type = trigger_type::ENTRY;
+        event->trigger_type = trigger_type::EXIT;
         krq->addEvent(std::move(event));
-      } else {
-        assert(false);
       }
       break;
     }
@@ -165,9 +154,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
         auto krq = it->second;
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
-      } else {
-        assert(false);
-      }
+      } 
       break;
     }
     case nvme_layer: {
@@ -177,8 +164,6 @@ void IOTracer::HandleBlockEvent(struct event *e) {
         auto krq = it->second;
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
-      } else {
-        assert(false);
       }
       break;
     }
@@ -195,9 +180,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
         krq->setVirtioRange(sector, nr_bytes);
-      } else {
-        assert(false);
-      }
+      } 
       break;
     }
     case qemu_layer: {
