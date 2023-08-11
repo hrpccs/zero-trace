@@ -1,9 +1,13 @@
 #pragma once
 #include "event_defs.h"
 #include "hook_point.h"
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/memory.hpp>
+#include <cereal/types/vector.hpp>
 #include <chrono>
 #include <ctime>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -11,7 +15,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <list>
 
 class Event {
 public:
@@ -33,7 +36,7 @@ public:
     info_type = e.info_type;
     trigger_type = e.trigger_type;
   }
-  ~Event() { }
+  ~Event() {}
 
   // 重载 new 运算符
   void *operator new(std::size_t size) {
@@ -45,7 +48,7 @@ public:
     void *ptr = nullptr;
     while (ptr == nullptr) {
       ptr = memory_pool_.allocate();
-      if(ptr == nullptr){
+      if (ptr == nullptr) {
         std::cout << "memory pool is empty, waiting..." << std::endl;
       }
     }
@@ -63,6 +66,9 @@ public:
   enum kernel_hook_type event_type;
   enum info_type info_type;
   enum trigger_type trigger_type;
+  template <class Archive> void serialize(Archive &archive) {
+    archive(timestamp, event_type, info_type, trigger_type);
+  }
 
   class MemoryPool {
   public:
@@ -112,7 +118,8 @@ public:
     // 将内存块返回给内存池
     void deallocate(void *ptr) noexcept {
       std::lock_guard<std::mutex> lock(mutex_);
-      free_list_.push_front(ptr); }
+      free_list_.push_front(ptr);
+    }
 
   private:
     // 内存池的大小
@@ -131,12 +138,14 @@ public:
 
     // 动态扩展内存池
     void expand_pool() {
-      char *new_pool = static_cast<char *>(std::malloc(kPoolSize * sizeof(Event)));
+      char *new_pool =
+          static_cast<char *>(std::malloc(kPoolSize * sizeof(Event)));
       if (new_pool == nullptr) {
         throw std::bad_alloc();
       }
       // 将新申请的内存分割成 Event 大小的内存块，并加入到当前内存池中
-      for (std::size_t i = 0; i < kPoolSize * sizeof(Event); i += sizeof(Event)) {
+      for (std::size_t i = 0; i < kPoolSize * sizeof(Event);
+           i += sizeof(Event)) {
         free_list_.push_back(new_pool + i);
       }
       // 将新申请的内存块加入到备用内存池中
@@ -144,8 +153,8 @@ public:
     }
   };
 
-  // 内存池
-  static MemoryPool memory_pool_;
+// 内存池
+static MemoryPool memory_pool_;
 };
 class Request {
   // a request is consisted of a series of syncronous events and several
@@ -222,12 +231,27 @@ public:
     unsigned long long bio_schedule_start_time = 0; // rq_insert
     unsigned long long bio_schedule_end_time = 0;   // rq_issue
     unsigned long long bio_complete_time = 0;
+    template <class Archive> void serialize(Archive &archive) {
+      archive(bio_is_throttled, bio_is_bounce, bio_queue_time,
+              bio_schedule_start_time, bio_schedule_end_time,
+              bio_complete_time);
+    }
   };
 
   unsigned long long start_time;
   unsigned long long end_time;
   std::vector<BioStatistic> bio_statistics;
 
-  // store real time
   std::tm start_tm;
+  long long real_start_time;
+  // store real time
+
+  template <class Archive> void serialize(Archive &archive) {
+    archive(request_id, id, events, syscall_tid, syscall_pid, syscall_fd,
+            syscall_dev, syscall_inode, syscall_dir_inode, syscall_ret,
+            syscall_offset, syscall_bytes, isVirtIO, driver_rq_offset,
+            driver_rq_nr_bytes, qemu_tid, virtblk_guest_offset,
+            virtblk_nr_bytes, host_syscall_offset, virtblk_nr_bytes, start_time,
+            end_time, bio_statistics, real_start_time);
+  }
 };
