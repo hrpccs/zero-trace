@@ -18,6 +18,7 @@
 
 class Event {
 public:
+  Event() {}
   Event(struct event *e) {
     timestamp = e->timestamp;
     event_type = e->event_type;

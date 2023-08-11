@@ -13,7 +13,7 @@
 #include "testcase.h"
 #include "mythreads.h"
 
-int main()
+int runAsClient()
 {
     std::thread t1{GuestThread::connect};
     std::thread t2{GuestThread::hook};
