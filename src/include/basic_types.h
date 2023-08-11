@@ -11,6 +11,10 @@
 #include <vector>
 #include <chrono>
 #include <ctime>
+#include <cereal/archives/binary.hpp>
+#include <cereal/types/memory.hpp>
+#include <cereal/types/vector.hpp>
+
 
 class Event {
 public:
@@ -37,6 +41,11 @@ public:
   enum kernel_hook_type event_type;
   enum info_type info_type;
   enum trigger_type trigger_type;
+  template<class Archive>
+  void serialize(Archive & archive)
+  {
+    archive(timestamp,event_type,info_type,trigger_type); 
+  }
 };
 
 class Request {
@@ -109,6 +118,11 @@ public:
     unsigned long long bio_schedule_start_time = 0; // rq_insert
     unsigned long long bio_schedule_end_time = 0; // rq_issue
     unsigned long long bio_complete_time = 0;
+    template<class Archive>
+    void serialize(Archive & archive)
+    {
+      archive(bio_is_throttled,bio_is_bounce,bio_queue_time,bio_schedule_start_time,bio_schedule_end_time,bio_complete_time); 
+    }
   };
 
   unsigned long long start_time;
@@ -116,9 +130,13 @@ public:
   std::vector<BioStatistic> bio_statistics;
 
   std::tm start_tm;
+  long long real_start_time;
   // store real time
 
-
-  
+  template<class Archive>
+  void serialize(Archive & archive)
+  {
+    archive(request_id,id,events,syscall_tid,syscall_pid,syscall_fd,syscall_dev,syscall_inode,syscall_dir_inode,syscall_ret,syscall_offset,syscall_bytes,hasIO,qemu_tid,virtblk_guest_offset,virtblk_nr_bytes,virtio_host_offset,virtio_nr_bytes,start_time,end_time,bio_statistics,real_start_time); 
+  }
 
 };
