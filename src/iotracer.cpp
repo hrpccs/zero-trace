@@ -16,8 +16,9 @@ void IOTracer::HandleBlockEvent(struct event *e) {
     if (krq == nullptr) {
       return;
     }
-    auto event = std::unique_ptr<Event>(new Event(e));
-    krq->addEvent(std::move(event));
+    krq->addEvent(std::unique_ptr<Event>(new Event(e)));
+    krq->io_statistics.push_back(Request::IOStatistic());
+    krq->io_statistics.back().bio_queue_time = e->timestamp;
     bio_requests[bio_id] = krq;
   } else if (e->event_type == kernel_hook_type::block__bio_add_to_rq) {
     int bio_id = e->block_layer_info.bio_id;
@@ -36,6 +37,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto krq = it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
+      krq->io_statistics.back().bio_done_time = e->timestamp;
       bio_requests.erase(it);
     }
   } else if (e->event_type == kernel_hook_type::block__rq_done) {
@@ -47,19 +49,46 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       krq->addEvent(std::move(event));
       rq_requests.erase(it);
     }
-  } else if (e->event_type == kernel_hook_type::block__bio_bounce ||
-             e->event_type == kernel_hook_type::block__bio_throttle ||
-             e->event_type == kernel_hook_type::block__bio_bounce) {
+  } else if (e->event_type == kernel_hook_type::block__bio_bounce) {
     int bio_id = e->block_layer_info.bio_id;
     auto it = bio_requests.find(bio_id);
     if (it != bio_requests.end()) {
       auto krq = it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
+      krq->io_statistics.back().bio_is_bounce = true;
     }
-  } else if (e->event_type == kernel_hook_type::block__rq_insert ||
-             e->event_type == kernel_hook_type::block__rq_issue ||
-             e->event_type == kernel_hook_type::block__rq_requeue) {
+  } else if (e->event_type == kernel_hook_type::block__bio_throttle) {
+    int bio_id = e->block_layer_info.bio_id;
+    auto it = bio_requests.find(bio_id);
+    if (it != bio_requests.end()) {
+      auto krq = it->second;
+      auto event = std::unique_ptr<Event>(new Event(e));
+      krq->addEvent(std::move(event));
+      krq->io_statistics.back().bio_is_bounce = true;
+      krq->io_statistics.back().bio_is_throttled = true;
+    }
+  } else if (e->event_type == kernel_hook_type::block__rq_insert) {
+    int rq_id = e->block_layer_info.rq_id;
+    auto it = rq_requests.find(rq_id);
+    if (it != rq_requests.end()) {
+      auto krq = it->second;
+      auto event = std::unique_ptr<Event>(new Event(e));
+      krq->addEvent(std::move(event));
+      krq->io_statistics.back().bio_schedule_start_time = e->timestamp;
+    }
+  } else if (e->event_type == kernel_hook_type::block__rq_issue) {
+    int rq_id = e->block_layer_info.rq_id;
+    auto it = rq_requests.find(rq_id);
+    if (it != rq_requests.end()) {
+      auto krq = it->second;
+      auto event = std::unique_ptr<Event>(new Event(e));
+      krq->addEvent(std::move(event));
+      krq->io_statistics.back().bio_schedule_end_time = e->timestamp;
+      krq->io_statistics.back().offset = e->block_layer_info.sector << 9;
+      krq->io_statistics.back().nr_bytes = e->block_layer_info.nr_bytes;
+    }
+  } else if (e->event_type == kernel_hook_type::block__rq_requeue) {
     int rq_id = e->block_layer_info.rq_id;
     auto it = rq_requests.find(rq_id);
     if (it != rq_requests.end()) {
@@ -76,10 +105,16 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
   int tid = e->syscall_layer_info.tid;
   int pid = e->syscall_layer_info.tgid;
   if (e->trigger_type == trigger_type::ENTRY) {
-    auto krq = std::make_shared<Request>();
-    krq->setSyscallInfo(e);
+    std::shared_ptr<Request> krq;
+    if (run_type == IOTracer::RUN_AS_HOST) {
+      krq = requests[tid];
+      krq->setHostSyscallInfo(e);
+    } else {
+      krq = std::make_shared<Request>();
+      requests.insert(std::make_pair(tid, krq));
+      krq->setSyscallInfo(e);
+    }
     krq->start_time = e->timestamp;
-    requests.insert(std::make_pair(tid, krq));
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
   } else if (e->trigger_type == trigger_type::EXIT) {
@@ -94,13 +129,16 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
       krq->addEvent(std::move(event));
       krq->setRet(ret);
       krq->end_time = e->timestamp;
-      requests.erase(it);
-      HandleDoneRequest(krq);
+      if (run_type != IOTracer::RUN_AS_HOST) {
+        requests.erase(it);
+        HandleDoneRequest(krq);
+      }
     }
   } else {
     assert(false);
   }
 }
+
 void IOTracer::HandleFsEvent(struct event *e) {
   int tid = e->fs_layer_info.tid;
   int pid = e->fs_layer_info.tgid;
@@ -113,7 +151,11 @@ void IOTracer::HandleFsEvent(struct event *e) {
     if (e->trigger_type != trigger_type::EXIT) {
       unsigned long offset = e->fs_layer_info.offset;
       unsigned long bytes = e->fs_layer_info.bytes;
-      krq->setSyscallRange(offset, bytes);
+      if (run_type == IOTracer::RUN_AS_HOST) {
+        krq->setHostSyscallRange(offset, bytes);
+      } else {
+        krq->setSyscallRange(offset, bytes);
+      }
     }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
@@ -183,8 +225,6 @@ void IOTracer::HandleVirtioEvent(struct event *e) {
     return;
   }
   int rq_id = e->virtio_layer_info.rq_id;
-  int sector = e->virtio_layer_info.sector;
-  int nr_bytes = e->virtio_layer_info.nr_bytes;
   auto it = rq_requests.find(rq_id);
   if (it != rq_requests.end()) {
     auto krq = it->second;
@@ -193,12 +233,194 @@ void IOTracer::HandleVirtioEvent(struct event *e) {
     }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
-    krq->setVirtioRange(sector, nr_bytes);
+    krq->io_statistics.back().isVirtIO = true;
   }
 }
 void IOTracer::HandleQemuEvent(struct event *e) {
   if (config.qemu_enable == false) {
     return;
+  }
+  int tid = e->qemu_layer_info.tid;
+  switch (e->event_type) {
+  case qemu__virtio_blk_handle_request: {
+    e->trigger_type = trigger_type::ENTRY;
+    auto qrq = std::make_shared<Request>();
+    qrq->setQemuInfo(e);
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qemu_tid_requests[tid] = qrq;
+    break;
+  }
+  case qemu__virtio_blk_req_complete: {
+    e->trigger_type = trigger_type::EXIT;
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->end_time = e->timestamp;
+      qemu_tid_requests.erase(it);
+      HandleDoneRequest(qrq);
+    }
+    break;
+  }
+  case qemu__blk_aio_pwritev: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->qemu_rq_type = RQ_TYPE_WRITE;
+    }
+    break;
+  }
+  case qemu__blk_aio_preadv: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->qemu_rq_type = RQ_TYPE_READ;
+    }
+    break;
+  }
+  case qemu__blk_aio_flush: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->qemu_rq_type = RQ_TYPE_FLUSH;
+    }
+    break;
+  }
+  case qemu__qcow2_co_pwritev_part: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->setQemuInfo(e);
+    }
+    break;
+  }
+  case qemu__qcow2_co_preadv_part: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->setQemuInfo(e);
+    }
+    break;
+  }
+  case qemu__qcow2_co_flush_to_os: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      auto event = std::unique_ptr<Event>(new Event(e));
+      qrq->addEvent(std::move(event));
+      qrq->setQemuInfo(e);
+    }
+    break;
+  }
+  case qemu__raw_co_prw: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto qrq = it->second;
+      if (qrq == nullptr) {
+        return;
+      }
+      qrq->setQemuInfo(e);
+    }
+    break;
+  }
+  case qemu__raw_co_flush_to_disk: {
+    auto it = qemu_tid_requests.find(tid);
+    if (it != qemu_tid_requests.end()) {
+      auto krq = it->second;
+      if (krq == nullptr) {
+        return;
+      }
+      krq->setQemuInfo(e);
+    }
+    break;
+  }
+  case qemu__handle_aiocb_rw: {
+    if (e->trigger_type == trigger_type::ENTRY) {
+      int prev_id = e->qemu_layer_info.prev_tid;
+      auto event = std::unique_ptr<Event>(new Event(e));
+      auto qrq = qemu_tid_requests[prev_id];
+      if (qrq == nullptr) {
+        return;
+      }
+      qrq->addEvent(std::move(event));
+      requests[tid] = qrq;
+    } else if (e->trigger_type == trigger_type::EXIT) {
+      auto it = requests.find(tid);
+      if (it != requests.end()) {
+        auto krq = it->second;
+        if (krq == nullptr) {
+          return;
+        }
+        auto event = std::unique_ptr<Event>(new Event(e));
+        krq->addEvent(std::move(event));
+        krq->end_time = e->timestamp;
+        requests.erase(it);
+        HandleDoneRequest(krq);
+      }
+    }
+    break;
+  }
+  case qemu__handle_aiocb_flush: {
+    if (e->trigger_type == trigger_type::ENTRY) {
+      int prev_id = e->qemu_layer_info.prev_tid;
+      auto event = std::unique_ptr<Event>(new Event(e));
+      auto qrq = qemu_tid_requests[prev_id];
+      if (qrq == nullptr) {
+        return;
+      }
+      qrq->addEvent(std::move(event));
+      requests[tid] = qrq;
+    } else if (e->trigger_type == trigger_type::EXIT) {
+      auto it = requests.find(tid);
+      if (it != requests.end()) {
+        auto krq = it->second;
+        if (krq == nullptr) {
+          return;
+        }
+        auto event = std::unique_ptr<Event>(new Event(e));
+        krq->addEvent(std::move(event));
+        krq->end_time = e->timestamp;
+        requests.erase(it);
+        HandleDoneRequest(krq);
+      }
+    }
+    break;
+  }
+  default:
+    assert(false);
   }
 }
 void IOTracer::AddEvent(void *data, size_t data_size) {
@@ -209,6 +431,7 @@ void IOTracer::AddEvent(void *data, size_t data_size) {
   if (e->timestamp < setup_timestamp) {
     return;
   }
+  // debug(NULL,data,data_size);
   switch (e->info_type) {
   case syscall_layer: {
     HandleSyscallEvent(e);

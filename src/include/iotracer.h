@@ -12,7 +12,9 @@
 #include <ctime>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <queue>
+#include <random>
 #include <semaphore.h>
 #include <thread>
 #include <unordered_map>
@@ -99,9 +101,13 @@ struct TraceConfig {
     printf("directory path: %s\n", directory_path.c_str());
     printf("device path: %s\n", device_path.c_str());
     printf("cgroup path: %s\n", cgroup_path.c_str());
+    printf("run as host: %d\n", asHost);
+    printf("run as guest: %d\n", asGuest);
   }
 
-  // ebpf skel
+  bool asHost;
+  bool asGuest;
+
   // trace enble
   bool qemu_enable = 0;
   bool syscall_enable = 1;
@@ -156,7 +162,7 @@ public:
     exiting = false;
   }
 
-  virtual ~IOTracer() {
+  ~IOTracer() {
     if (skel) {
       iotrace_bpf::destroy(skel);
     }
@@ -164,42 +170,52 @@ public:
       bpf_map__unpin(skel->maps.ringbuffer, "/sys/fs/bpf/ringbuffer");
       ring_buffer__free(rb);
     }
+    if (qemu_skel) {
+      qemu_uprobe_bpf::destroy(qemu_skel);
+    }
   }
 
   void Logger() {
     while (!exiting) {
       std::shared_ptr<Request> request;
-      sem_wait(&done_request_queue.sem);
+      sem_wait(&request_to_log_queue.sem);
       {
-        std::lock_guard<std::mutex> lock(done_request_queue.mutex);
-        if (done_request_queue.results.empty()) {
+        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+        if (request_to_log_queue.results.empty()) {
           continue;
         }
-        request = done_request_queue.results.front();
-        done_request_queue.results.pop();
+        request = request_to_log_queue.results.front();
+        request_to_log_queue.results.pop();
       }
       done_request_handler->HandleDoneRequest(request, config);
     }
   }
 
-  // void HostAgent() { // connect
-  //   ServerEngine server;
-  //   while (exiting) {
-  //     Type type;
-  //     void *data;
-  //     server.recvMesg(type, data);
-  //     if (type == TYPE_timestamps) {
-  //       server.getDeltaHelper();
-  //     } else if (type == TYPE_Request) {
-  //       std::shared_ptr<Request> request =
-  //           std::shared_ptr<Request>((Request *)data);
-  //       std::lock_guard<std::mutex> lock(from_guest_request_queue.mutex);
+  bool findAndMergeQemuRq(std::shared_ptr<Request> &request) {
+    long long offset = request->guest_offset_time;
 
-  //       from_guest_request_queue.results.push(request); // 
-  //       sem_post(&from_guest_request_queue.sem);
-  //     }
-  //   }
-  // }
+    auto &bio_info = request->io_statistics;
+
+    for (int i = 0; i < request->events.size(); i++) {
+    }
+  }
+
+  void HostAgent() { // connect
+    ServerEngine server;
+    while (exiting) {
+      Type type;
+      void *data;
+      server.recvMesg(type, data);
+      if (type == TYPE_timestamps) {
+        server.getDeltaHelper();
+      } else if (type == TYPE_Request) {
+        std::shared_ptr<Request> request =
+            std::shared_ptr<Request>((Request *)data);
+        // 把刚刚反序列化的 request 先保存着
+        // 直接从 native_request_queue 里面取出来
+      }
+    }
+  }
 
   void GuestAgent() { // connect
     ClientEngine client_engine;
@@ -208,23 +224,17 @@ public:
     long long offset;
     while (!exiting) {
       std::shared_ptr<Request> request;
-      sem_wait(&done_request_queue.sem);
+      sem_wait(&request_to_log_queue.sem);
       {
         long long curr = get_timestamp();
         if (curr - last_sync_time > sync_timeout) {
           offset = client_engine.getDelta();
           last_sync_time = curr;
         }
-        std::lock_guard<std::mutex> lock(done_request_queue.mutex);
-        request = done_request_queue.results.front();
-        done_request_queue.results.pop();
-
-        for (auto &event : request->events) {
-          event->timestamp -= offset;
-        }
-        request->start_time -= offset;
-        request->end_time -= offset;
-
+        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+        request = request_to_log_queue.results.front();
+        request_to_log_queue.results.pop();
+        request->guest_offset_time = offset;
         int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
         fprintf(stdout, "send request to guest, len: %d\n", ret);
       }
@@ -248,10 +258,38 @@ public:
       fprintf(stderr, "Failed to open and load BPF skeleton\n");
       exit(1);
     }
+
+    if (RUN_AS_HOST) {
+      qemu_skel = qemu_uprobe_bpf::open(&open_opts);
+      if (!qemu_skel) {
+        fprintf(stderr, "Failed to open and load BPF skeleton\n");
+        exit(1);
+      }
+    }
   }
 
-  void configAndLoadBPF() {
-    config.qemu_enable = 0; // 默認不開始 qemu
+  void configBPF() {
+    if (config.asGuest && config.asHost) {
+      fprintf(stderr, "can not run as guest and host at the same time\n");
+      exit(1);
+    }
+    run_type = RUN_STANDALONE;
+    config.qemu_enable = 0;
+    if (config.asGuest) {
+      run_type = RUN_AS_GUEST;
+      config.virtio_enable = 1;
+    }
+    if (config.asHost) {
+      run_type = RUN_AS_HOST;
+      config.qemu_enable = 1;
+      if (config.pid == 0) {
+        fprintf(stderr, "qemu pid is not set\n");
+        exit(1);
+      }
+    }
+  }
+
+  void loadAndAttachBPF() {
     skel->bss->qemu_enable = config.qemu_enable;
     skel->bss->syscall_enable = config.syscall_enable;
     skel->bss->vfs_enable = config.vfs_enable;
@@ -268,6 +306,23 @@ public:
       fprintf(stderr, "Failed to load and verify BPF skeleton\n");
       exit(1);
     }
+    err = iotrace_bpf::attach(skel);
+    if (err) {
+      fprintf(stderr, "Failed to attach BPF skeleton\n");
+      exit(1);
+    }
+    if (RUN_AS_HOST) {
+      err = qemu_uprobe_bpf::load(qemu_skel);
+      if (err) {
+        fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+        exit(1);
+      }
+      err = qemu_uprobe_bpf::attach(qemu_skel);
+      if (err) {
+        fprintf(stderr, "Failed to attach BPF skeleton\n");
+        exit(1);
+      }
+    }
   }
 
   void setuptLogger() {
@@ -277,11 +332,6 @@ public:
 
   void startTracing(void *ctx) {
     int err;
-    err = iotrace_bpf::attach(skel);
-    if (err) {
-      fprintf(stderr, "Failed to attach BPF skeleton\n");
-      exit(1);
-    }
     setup_timestamp = get_timestamp();
     int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
     rb = ring_buffer__new(rb_fd, IOTracer::AddTrace, ctx, nullptr);
@@ -380,14 +430,11 @@ public:
       int type = e->event_type;
       int trigger = e->trigger_type;
       int rq_id = e->virtio_layer_info.rq_id;
-      long long sector = e->virtio_layer_info.sector;
-      long long nr_bytes = e->virtio_layer_info.nr_bytes;
       unsigned int dev = e->virtio_layer_info.dev;
       fprintf(stdout,
               "event type: %s, trigger type: %d, rq_id: %d, sector: %lld, "
               "nr_bytes: %lld, dev: %u\n",
-              kernel_hook_type_str[type], trigger, rq_id, sector, nr_bytes,
-              dev);
+              kernel_hook_type_str[type], trigger, rq_id, 0, 0, dev);
     }
     // const char *event_type_str = kernel_hook_type_str[e->event_type];
     // const char *layer_type_str = info_type_str[e->info_type];
@@ -397,16 +444,25 @@ public:
   }
 
   void HandleDoneRequest(std::shared_ptr<Request> req) {
-    unsigned long long total_time = req->end_time - req->start_time;
-    double ms = total_time / 1000000.0;
-    if (ms < config.time_threshold) {
-      return;
+    if (run_type == RUN_AS_HOST) {
+      std::lock_guard<std::mutex> lock(native_request_queue.mutex);
+      native_request_queue.results.push(req);
+      auto& ioinfo = req->io_statistics;
+      for(int i = 0; i < ioinfo.size(); i++) {
+        fprintf(stdout,"isVirtIO %d offset %lld nr_bytes %lld\n", ioinfo[i].isVirtIO, ioinfo[i].offset, ioinfo[i].nr_bytes);
+      }
+    } else {
+      unsigned long long total_time = req->end_time - req->start_time;
+      double ms = total_time / 1000000.0;
+      if (ms < config.time_threshold) {
+        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+        request_to_log_queue.results.push(req);
+        sem_post(&request_to_log_queue.sem);
+        return;
+      }
     }
-    std::lock_guard<std::mutex> lock(done_request_queue.mutex);
-    done_request_queue.results.push(req);
-    sem_post(&done_request_queue.sem);
-  }
 
+  }
 
   void HandleBlockEvent(struct event *data);
   void HandleFsEvent(struct event *data);
@@ -416,16 +472,19 @@ public:
   void HandleNvmeEvent(struct event *data);
   void HandleVirtioEvent(struct event *data);
   void HandleQemuEvent(struct event *data);
-
+  enum RunType { RUN_AS_GUEST, RUN_AS_HOST, RUN_STANDALONE };
+  RunType run_type = RUN_STANDALONE;
   bool exiting;
   struct iotrace_bpf *skel;
+  struct qemu_uprobe_bpf *qemu_skel;
   struct ring_buffer *rb;
   TraceConfig config;
   std::unique_ptr<DoneRequestHandler> done_request_handler;
-  RequestQueue done_request_queue;
-  RequestQueue qemu_request_queue;
+  RequestQueue request_to_log_queue;
+  RequestQueue native_request_queue;
   std::unordered_map<int, std::shared_ptr<Request>> requests;
   std::unordered_map<int, std::shared_ptr<Request>> bio_requests;
   std::unordered_map<int, std::shared_ptr<Request>> rq_requests;
+  std::unordered_map<int, std::shared_ptr<Request>> qemu_tid_requests;
   long long setup_timestamp = 0;
 };

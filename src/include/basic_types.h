@@ -154,8 +154,8 @@ public:
     }
   };
 
-// 内存池
-static MemoryPool memory_pool_;
+  // 内存池
+  static MemoryPool memory_pool_;
 };
 class Request {
   // a request is consisted of a series of syncronous events and several
@@ -182,6 +182,17 @@ public:
     syscall_fd = e->syscall_layer_info.fd;
   }
 
+  void setHostSyscallInfo(struct event *e) {
+    host_syscall_dev = e->syscall_layer_info.dev;
+    host_syscall_inode = e->syscall_layer_info.inode;
+    host_syscall_dir_inode = e->syscall_layer_info.dir_inode;
+  }
+
+  void setHostSyscallRange(unsigned long offset, unsigned int bytes) {
+    this->host_syscall_offset = offset;
+    this->host_syscall_nr_bytes = bytes;
+  }
+
   void setRet(int ret) { this->syscall_ret = ret; }
 
   void setSyscallRange(unsigned long offset, unsigned int bytes) {
@@ -190,16 +201,28 @@ public:
   }
 
   void setQemuInfo(struct event *e) {
-    isQemuRq = true;
-    qemu_tid = e->qemu_layer_info.tid;
-    virtblk_guest_offset = e->qemu_layer_info.offset;
-    virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
-  }
+    if (e->event_type == qemu__qcow2_co_pwritev_part) {
+      isQemuRq = true;
+      qemu_tid = e->qemu_layer_info.tid;
+      virtblk_guest_offset = e->qemu_layer_info.offset;
+      virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
+    } else if (e->event_type == qemu__qcow2_co_preadv_part) {
+      isQemuRq = true;
+      qemu_tid = e->qemu_layer_info.tid;
+      virtblk_guest_offset = e->qemu_layer_info.offset;
+      virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
+    } else if (e->event_type == qemu__qcow2_co_flush_to_os) {
+      isQemuRq = true;
+      qemu_tid = e->qemu_layer_info.tid;
+      virtblk_guest_offset = e->qemu_layer_info.offset;
+      virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
+    } else if (e->event_type == qemu__raw_co_prw) {
+      host_syscall_nr_bytes = e->qemu_layer_info.nr_bytes;
+      host_syscall_offset = e->qemu_layer_info.offset;
+    } else if (e->event_type == qemu__raw_co_flush_to_disk) {
+    }
 
-  void setVirtioRange(unsigned long sector, unsigned int nr_bytes) {
-    this->isVirtIO = true;
-    this->driver_rq_offset = sector << 9;
-    this->driver_rq_nr_bytes = nr_bytes;
+    // virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
   }
 
   unsigned long long id;
@@ -207,41 +230,45 @@ public:
   int syscall_tid, syscall_pid;
   int syscall_fd;
   unsigned long syscall_dev, syscall_inode, syscall_dir_inode;
+  enum rq_type syscall_rq_type;
   int syscall_ret;
-  unsigned long syscall_offset;
-  unsigned int syscall_bytes;
+  unsigned long syscall_offset; // use in top level syscall
+  unsigned int syscall_bytes;   // use in top level syscall
   bool isVirtIO = false;
-  unsigned long driver_rq_offset;
-  unsigned long driver_rq_nr_bytes;
 
   // just for qemu
   bool isQemuRq = false;
   int qemu_tid;
+  enum rq_type qemu_rq_type;
   // to match guest's dirver_rq_offset
   unsigned long virtblk_guest_offset;
   unsigned int virtblk_nr_bytes;
-  unsigned long host_syscall_offset;
-  unsigned int host_syscall_nr_bytes;
+  unsigned long host_syscall_offset;  // for subsyscall within qemu io
+  unsigned int host_syscall_nr_bytes; // for subsyscall within qemu io
+  unsigned long host_syscall_dev, host_syscall_inode, host_syscall_dir_inode;
 
   // for statistics
-  struct BioStatistic {
-    bool done = false;
+  struct IOStatistic {
+    IOStatistic() {}
     bool bio_is_throttled = false;
     bool bio_is_bounce = false;
-    unsigned long long bio_queue_time = 0;
+    unsigned long long bio_queue_time = 0;          // bio_queue
     unsigned long long bio_schedule_start_time = 0; // rq_insert
     unsigned long long bio_schedule_end_time = 0;   // rq_issue
-    unsigned long long bio_complete_time = 0;
+    unsigned long long bio_done_time = 0;           // bio_done
+    unsigned long long offset = 0;
+    unsigned int nr_bytes = 0;
+    bool isVirtIO = false;
     template <class Archive> void serialize(Archive &archive) {
       archive(bio_is_throttled, bio_is_bounce, bio_queue_time,
-              bio_schedule_start_time, bio_schedule_end_time,
-              bio_complete_time);
+              bio_schedule_start_time, bio_schedule_end_time, bio_done_time,
+              offset, nr_bytes, isVirtIO);
     }
   };
 
   unsigned long long start_time;
   unsigned long long end_time;
-  std::vector<BioStatistic> bio_statistics;
+  std::vector<IOStatistic> io_statistics;
 
   std::tm start_tm;
   long long real_start_time;
@@ -249,10 +276,10 @@ public:
 
   template <class Archive> void serialize(Archive &archive) {
     archive(request_id, id, events, syscall_tid, syscall_pid, syscall_fd,
-            syscall_dev, syscall_inode, syscall_dir_inode, syscall_ret,
-            syscall_offset, syscall_bytes, isVirtIO, driver_rq_offset,
-            driver_rq_nr_bytes, qemu_tid, virtblk_guest_offset,
-            virtblk_nr_bytes, host_syscall_offset, virtblk_nr_bytes, start_time,
-            end_time, bio_statistics, real_start_time,guest_offset_time);
+            syscall_dev, syscall_inode, syscall_dir_inode, syscall_rq_type, syscall_ret,
+            syscall_offset, syscall_bytes, isVirtIO, isQemuRq,qemu_tid,qemu_rq_type,
+            virtblk_guest_offset, virtblk_nr_bytes, host_syscall_offset,
+            host_syscall_nr_bytes, start_time, end_time, io_statistics,
+            real_start_time, guest_offset_time,host_syscall_inode,host_syscall_dir_inode,host_syscall_dev);
   }
 };
