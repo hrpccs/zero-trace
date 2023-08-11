@@ -245,7 +245,7 @@ public:
 
   std::tm start_tm;
   long long real_start_time;
-  // store real time
+  long long guest_offset_time;
 
   template <class Archive> void serialize(Archive &archive) {
     archive(request_id, id, events, syscall_tid, syscall_pid, syscall_fd,
@@ -253,6 +253,6 @@ public:
             syscall_offset, syscall_bytes, isVirtIO, driver_rq_offset,
             driver_rq_nr_bytes, qemu_tid, virtblk_guest_offset,
             virtblk_nr_bytes, host_syscall_offset, virtblk_nr_bytes, start_time,
-            end_time, bio_statistics, real_start_time);
+            end_time, bio_statistics, real_start_time,guest_offset_time);
   }
 };

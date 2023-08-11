@@ -5,16 +5,17 @@
 #include "event_defs.h"
 #include "hook_point.h"
 #include "iotrace.skel.h"
+#include "mesgtype.h"
 #include "qemu_uprobe.skel.h"
 #include "utils.h"
+#include "vsockutils.h"
 #include <ctime>
 #include <filesystem>
 #include <memory>
 #include <queue>
+#include <semaphore.h>
 #include <thread>
 #include <unordered_map>
-#include <queue>
-#include <semaphore.h>
 
 struct TraceConfig {
   TraceConfig() {
@@ -27,7 +28,7 @@ struct TraceConfig {
     filemap_enable = 0;
     iomap_enable = 1;
     sched_enable = 1;
-    virtio_enable = 0;
+    virtio_enable = 1;
     task_name = "";
     pid = 0;
     tid = 0;
@@ -76,7 +77,6 @@ struct TraceConfig {
     config->dev = 0;
     config->directory_inode = 0;
     config->inode = 0;
-
 
     if (cgroup_path.size() > 0) {
       config->cgroup_id = get_cgroup_id(cgroup_path.c_str());
@@ -137,12 +137,8 @@ public:
 
 struct RequestQueue {
   // 信号量
-  RequestQueue() {
-    sem_init(&sem, 0, 0);
-  }
-  ~RequestQueue() {
-    sem_destroy(&sem);
-  }
+  RequestQueue() { sem_init(&sem, 0, 0); }
+  ~RequestQueue() { sem_destroy(&sem); }
   sem_t sem;
   std::mutex mutex;
   std::queue<std::shared_ptr<Request>> results;
@@ -165,12 +161,12 @@ public:
       iotrace_bpf::destroy(skel);
     }
     if (rb) {
-      bpf_map__unpin(skel->maps.ringbuffer,"/sys/fs/bpf/ringbuffer");
+      bpf_map__unpin(skel->maps.ringbuffer, "/sys/fs/bpf/ringbuffer");
       ring_buffer__free(rb);
     }
   }
 
-  virtual void coworker() {
+  void Logger() {
     while (!exiting) {
       std::shared_ptr<Request> request;
       sem_wait(&done_request_queue.sem);
@@ -186,14 +182,63 @@ public:
     }
   }
 
-  virtual void AddEvent(void *data, size_t data_size);
+  // void HostAgent() { // connect
+  //   ServerEngine server;
+  //   while (exiting) {
+  //     Type type;
+  //     void *data;
+  //     server.recvMesg(type, data);
+  //     if (type == TYPE_timestamps) {
+  //       server.getDeltaHelper();
+  //     } else if (type == TYPE_Request) {
+  //       std::shared_ptr<Request> request =
+  //           std::shared_ptr<Request>((Request *)data);
+  //       std::lock_guard<std::mutex> lock(from_guest_request_queue.mutex);
+
+  //       from_guest_request_queue.results.push(request); // 
+  //       sem_post(&from_guest_request_queue.sem);
+  //     }
+  //   }
+  // }
+
+  void GuestAgent() { // connect
+    ClientEngine client_engine;
+    constexpr long long sync_timeout = 1e9 * 10; // 10s
+    long long last_sync_time = 0;
+    long long offset;
+    while (!exiting) {
+      std::shared_ptr<Request> request;
+      sem_wait(&done_request_queue.sem);
+      {
+        long long curr = get_timestamp();
+        if (curr - last_sync_time > sync_timeout) {
+          offset = client_engine.getDelta();
+          last_sync_time = curr;
+        }
+        std::lock_guard<std::mutex> lock(done_request_queue.mutex);
+        request = done_request_queue.results.front();
+        done_request_queue.results.pop();
+
+        for (auto &event : request->events) {
+          event->timestamp -= offset;
+        }
+        request->start_time -= offset;
+        request->end_time -= offset;
+
+        int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
+        fprintf(stdout, "send request to guest, len: %d\n", ret);
+      }
+    }
+  }
+
+  void AddEvent(void *data, size_t data_size);
   static int AddTrace(void *ctx, void *data, size_t data_size) {
     IOTracer *tracer = (IOTracer *)ctx;
     tracer->AddEvent(data, data_size);
     return 0;
   }
 
-  virtual void openBPF() {
+  void openBPF() {
     LIBBPF_OPTS(bpf_object_open_opts, open_opts);
     int err;
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
@@ -205,7 +250,7 @@ public:
     }
   }
 
-  virtual void configAndLoadBPF() {
+  void configAndLoadBPF() {
     config.qemu_enable = 0; // 默認不開始 qemu
     skel->bss->qemu_enable = config.qemu_enable;
     skel->bss->syscall_enable = config.syscall_enable;
@@ -225,12 +270,12 @@ public:
     }
   }
 
-  virtual void startCoworker() {
-    std::thread t(&IOTracer::coworker, this);
+  void setuptLogger() {
+    std::thread t(&IOTracer::Logger, this);
     t.detach();
   }
 
-  virtual void startTracing(void *ctx) {
+  void startTracing(void *ctx) {
     int err;
     err = iotrace_bpf::attach(skel);
     if (err) {
@@ -252,6 +297,8 @@ public:
       }
     }
   }
+
+  void stopTracing() { exiting = true; }
 
   int static debug(void *ctx, void *data, size_t data_size) {
     struct event *e = (struct event *)data;
@@ -349,67 +396,26 @@ public:
     return 0;
   }
 
-  void startDebug() {
-    int err;
-    err = iotrace_bpf::attach(skel);
-    if (err) {
-      fprintf(stderr, "Failed to attach BPF skeleton\n");
-      exit(1);
+  void HandleDoneRequest(std::shared_ptr<Request> req) {
+    unsigned long long total_time = req->end_time - req->start_time;
+    double ms = total_time / 1000000.0;
+    if (ms < config.time_threshold) {
+      return;
     }
-    setup_timestamp = get_timestamp();
-    int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
-    rb = ring_buffer__new(rb_fd, IOTracer::debug, nullptr, nullptr);
-    if (!rb) {
-      fprintf(stderr, "Failed to create ring buffer\n");
-      exit(1);
-    }
-    while (!exiting) {
-      err = ring_buffer__poll(rb, 100);
-      if (err < 0) {
-        fprintf(stderr, "Failed to consume ring buffer\n");
-        exit(1);
-      }
-    }
-  }
-
-  virtual void HandleDoneRequest(std::shared_ptr<Request> req) {
-  unsigned long long total_time = req->end_time - req->start_time;
-  double ms = total_time / 1000000.0;
-  if (ms < config.time_threshold) {
-    return;
-  }
     std::lock_guard<std::mutex> lock(done_request_queue.mutex);
     done_request_queue.results.push(req);
     sem_post(&done_request_queue.sem);
   }
 
-  std::shared_ptr<Request> GetRequestByTid(int tid) {
-    if (requests.find(tid) != requests.end()) {
-      return requests[tid];
-    } else {
-      return nullptr;
-    }
-  }
-  std::shared_ptr<Request> GetRequestByBioid(int bio_id) {
-    if (bio_requests.find(bio_id) != bio_requests.end()) {
-      return bio_requests[bio_id];
-    } else {
-      return nullptr;
-    }
-  }
-  std::shared_ptr<Request> GetRequestByRqid(int rq_id) {
-    if (rq_requests.find(rq_id) != rq_requests.end()) {
-      return rq_requests[rq_id];
-    } else {
-      return nullptr;
-    }
-  }
-
-  void stopTracing() { exiting = true; }
-
 
   void HandleBlockEvent(struct event *data);
- 
+  void HandleFsEvent(struct event *data);
+  void HandleSyscallEvent(struct event *data);
+  void HandleSchedEvent(struct event *data);
+  void HandleScsiEvent(struct event *data);
+  void HandleNvmeEvent(struct event *data);
+  void HandleVirtioEvent(struct event *data);
+  void HandleQemuEvent(struct event *data);
 
   bool exiting;
   struct iotrace_bpf *skel;
@@ -417,6 +423,7 @@ public:
   TraceConfig config;
   std::unique_ptr<DoneRequestHandler> done_request_handler;
   RequestQueue done_request_queue;
+  RequestQueue qemu_request_queue;
   std::unordered_map<int, std::shared_ptr<Request>> requests;
   std::unordered_map<int, std::shared_ptr<Request>> bio_requests;
   std::unordered_map<int, std::shared_ptr<Request>> rq_requests;

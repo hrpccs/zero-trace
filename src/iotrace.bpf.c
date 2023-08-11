@@ -242,6 +242,8 @@ int BPF_KPROBE_SYSCALL(trace_read, int fd, void *buf, size_t count) {
   e->info_type = syscall_layer;
   e->trigger_type = ENTRY;
   e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
   e->syscall_layer_info.fd  = fd;
   e->syscall_layer_info.inode = inode;
   e->syscall_layer_info.dir_inode = dir_inode;
