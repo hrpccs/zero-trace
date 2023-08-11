@@ -2025,7 +2025,6 @@ int handle_tp_sched_1(struct bpf_raw_tracepoint_args *ctx) {
     e->sched_layer_info.prev_tid = prev_tid;
     e->sched_layer_info.next_tid = next_tid;
     bpf_ringbuf_submit(e, 0);
-    return 0;
   }
 
   int* next_tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &next_tid);
@@ -2431,7 +2430,7 @@ int BPF_PROG(rq_qos_throttle, struct rq_qos *q, struct bio *bio)
     return 0;
   }
 
-  e->event_type = block__bio_done;
+  e->event_type = block__bio_throttle;
   e->info_type = block_layer;
   e->trigger_type = NOT_PAIR;
   e->timestamp = bpf_ktime_get_ns();
