@@ -7,12 +7,14 @@
 #include "iotrace.skel.h"
 #include "qemu_uprobe.skel.h"
 #include "utils.h"
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <queue>
 #include <thread>
 #include <unordered_map>
 #include <queue>
+#include <semaphore.h>
 
 struct TraceConfig {
   TraceConfig() {
@@ -134,6 +136,14 @@ public:
 };
 
 struct RequestQueue {
+  // 信号量
+  RequestQueue() {
+    sem_init(&sem, 0, 0);
+  }
+  ~RequestQueue() {
+    sem_destroy(&sem);
+  }
+  sem_t sem;
   std::mutex mutex;
   std::queue<std::shared_ptr<Request>> results;
 };
@@ -155,6 +165,7 @@ public:
       iotrace_bpf::destroy(skel);
     }
     if (rb) {
+      bpf_map__unpin(skel->maps.ringbuffer,"/sys/fs/bpf/ringbuffer");
       ring_buffer__free(rb);
     }
   }
@@ -162,6 +173,7 @@ public:
   virtual void coworker() {
     while (!exiting) {
       std::shared_ptr<Request> request;
+      sem_wait(&done_request_queue.sem);
       {
         std::lock_guard<std::mutex> lock(done_request_queue.mutex);
         if (done_request_queue.results.empty()) {
@@ -225,6 +237,7 @@ public:
       fprintf(stderr, "Failed to attach BPF skeleton\n");
       exit(1);
     }
+    setup_timestamp = get_timestamp();
     int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
     rb = ring_buffer__new(rb_fd, IOTracer::AddTrace, ctx, nullptr);
     if (!rb) {
@@ -343,6 +356,7 @@ public:
       fprintf(stderr, "Failed to attach BPF skeleton\n");
       exit(1);
     }
+    setup_timestamp = get_timestamp();
     int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
     rb = ring_buffer__new(rb_fd, IOTracer::debug, nullptr, nullptr);
     if (!rb) {
@@ -358,9 +372,15 @@ public:
     }
   }
 
-  virtual void HandleDoneRequest(std::shared_ptr<Request> request) {
+  virtual void HandleDoneRequest(std::shared_ptr<Request> req) {
+  unsigned long long total_time = req->end_time - req->start_time;
+  double ms = total_time / 1000000.0;
+  if (ms < config.time_threshold) {
+    return;
+  }
     std::lock_guard<std::mutex> lock(done_request_queue.mutex);
-    done_request_queue.results.push(request);
+    done_request_queue.results.push(req);
+    sem_post(&done_request_queue.sem);
   }
 
   std::shared_ptr<Request> GetRequestByTid(int tid) {
@@ -400,4 +420,5 @@ public:
   std::unordered_map<int, std::shared_ptr<Request>> requests;
   std::unordered_map<int, std::shared_ptr<Request>> bio_requests;
   std::unordered_map<int, std::shared_ptr<Request>> rq_requests;
+  long long setup_timestamp = 0;
 };

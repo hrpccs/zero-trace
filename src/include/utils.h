@@ -15,3 +15,4 @@
 unsigned long long get_cgroup_id(const char *path);
 unsigned long long get_file_inode(const char *path);
 unsigned long long get_device_id(const char *path);
+unsigned long long get_timestamp();

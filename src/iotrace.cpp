@@ -30,6 +30,7 @@
 
 
 unsigned long long Request::request_id = 0;
+Event::MemoryPool Event::memory_pool_;
 IOTracer* tracer = nullptr;
 
 static void sig_handler(int signo) {

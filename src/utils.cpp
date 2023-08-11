@@ -1,4 +1,5 @@
 #include "utils.h"
+#include <ctime>
 
 unsigned long long get_cgroup_id(const char *path) {
   int dirfd, err, flags, mount_id, fhsize;
@@ -52,4 +53,10 @@ unsigned long long get_device_id(const char* path){
     return 0;
   }
   return buf.st_rdev;
+}
+
+unsigned long long get_timestamp(){
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000000000 + ts.tv_nsec;
 }

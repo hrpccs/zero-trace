@@ -78,6 +78,9 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       return;
     }
     struct event *e = (struct event *)data;
+    if(e->timestamp < setup_timestamp){
+      return;
+    }
     switch (e->info_type) {
     case syscall_layer: {
       int tid = e->syscall_layer_info.tid;
