@@ -180,7 +180,7 @@ int ClientEngine::connAddr()
     int ret = connect(mysock,(sockaddr *)&myaddr, sizeof(sockaddr_vm));
     if(ret < 0) 
     {
-        fprintf(stderr,"connect error");
+        fprintf(stderr,"connect error\n");
         abort();
     }
     return ret;
@@ -202,7 +202,7 @@ int ServerEngine::bindAddr()
     int ret = bind(mysock,(sockaddr *)&myaddr, sizeof(sockaddr_vm));
     if(ret < 0) 
     {
-        fprintf(stderr,"bind error");
+        fprintf(stderr,"bind error\n");
         abort();
     }
     return ret;
@@ -213,7 +213,7 @@ int ServerEngine::listenSock(int len)
     int ret = listen(mysock, 5);
     if(ret < 0) 
     {
-        fprintf(stderr,"listen error");
+        fprintf(stderr,"listen error\n");
         abort();
     }
     return ret;
@@ -226,7 +226,7 @@ int ServerEngine::acceptConn()
 
     if(-1 == sock_client)
     {
-        fprintf(stderr,"accept error");
+        fprintf(stderr,"accept error\n");
         abort();
     }
     return sock_client;
