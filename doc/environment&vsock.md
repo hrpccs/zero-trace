@@ -402,8 +402,8 @@ dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /nores
 
 ## 参考资料
 
-[(56条消息) Linux 内核调试 七：qemu网络配置_lqonlylove的博客-CSDN博客](https://blog.csdn.net/OnlyLove_/article/details/124536607)
+[Linux 内核调试 七：qemu网络配置_lqonlylove的博客-CSDN博客](https://blog.csdn.net/OnlyLove_/article/details/124536607)
 
-[(56条消息) qemu虚拟机配置网络_qemu 配置网络_千墨的博客-CSDN博客](https://blog.csdn.net/jcf147/article/details/131290211)
+[qemu虚拟机配置网络_qemu 配置网络_千墨的博客-CSDN博客](https://blog.csdn.net/jcf147/article/details/131290211)
 
 [cereal Docs - Main (uscilab.github.io)](https://uscilab.github.io/cereal/index.html)
