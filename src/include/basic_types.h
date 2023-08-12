@@ -261,10 +261,12 @@ public:
     unsigned long long offset = 0;
     unsigned int nr_bytes = 0;
     bool isVirtIO = false;
+    int issue_idx_in_request = -1;
+    int done_idx_in_request = -1;
     template <class Archive> void serialize(Archive &archive) {
       archive(bio_is_throttled, bio_is_bounce, bio_queue_time,
               bio_schedule_start_time, bio_schedule_end_time, bio_done_time,
-              offset, nr_bytes, isVirtIO);
+              offset, nr_bytes, isVirtIO, issue_idx_in_request,done_idx_in_request);
     }
   };
 

@@ -39,6 +39,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
       krq->io_statistics.back().bio_done_time = e->timestamp;
+      krq->io_statistics.back().done_idx_in_request = krq->events.size() - 1;
       bio_requests.erase(it);
     }
   } else if (e->event_type == kernel_hook_type::block__rq_done) {
@@ -88,6 +89,7 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       krq->io_statistics.back().bio_schedule_end_time = e->timestamp;
       krq->io_statistics.back().offset = e->block_layer_info.sector << 9;
       krq->io_statistics.back().nr_bytes = e->block_layer_info.nr_bytes;
+      krq->io_statistics.back().issue_idx_in_request = krq->events.size() - 1;
     }
   } else if (e->event_type == kernel_hook_type::block__rq_requeue) {
     int rq_id = e->block_layer_info.rq_id;
@@ -109,6 +111,9 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
     std::shared_ptr<Request> krq;
     if (run_type == IOTracer::RUN_AS_HOST) {
       krq = requests[tid];
+      if (krq == nullptr) {
+        return;
+      }
       krq->setHostSyscallInfo(e);
     } else {
       krq = std::make_shared<Request>();
@@ -270,21 +275,27 @@ void IOTracer::HandleQemuEvent(struct event *e) {
       auto task_vec_it = task_vec.begin();
       for (; task_vec_it != task_vec.end(); task_vec_it++) {
         if (task_vec_it->first == e->qemu_layer_info.virt_rq_addr) {
+          auto qrq = task_vec_it->second;
+          auto event = std::unique_ptr<Event>(new Event(e));
+          event->trigger_type = trigger_type::EXIT;
+          qrq->addEvent(std::move(event));
+          qrq->end_time = e->timestamp;
+          task_vec.erase(task_vec_it);
+          HandleDoneRequest(qrq);
           break;
         }
       }
-      auto qrq = task_vec_it->second;
-      auto event = std::unique_ptr<Event>(new Event(e));
-      event->trigger_type = trigger_type::EXIT;
-      qrq->addEvent(std::move(event));
-      qrq->end_time = e->timestamp;
-      task_vec.erase(task_vec_it);
-      HandleDoneRequest(qrq);
     }
     break;
   }
   case qemu__blk_aio_pwritev: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -292,7 +303,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__blk_aio_preadv: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -300,7 +317,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__blk_aio_flush: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -308,7 +331,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__qcow2_co_pwritev_part: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -316,7 +345,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__qcow2_co_preadv_part: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -324,7 +359,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__qcow2_co_flush_to_os: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -332,7 +373,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__raw_co_prw: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -340,7 +387,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__raw_co_flush_to_disk: {
+    if (qemu_tid_requests.find(tid) == qemu_tid_requests.end()) {
+      return;
+    }
     auto &task_vec = qemu_tid_requests[tid];
+    if (task_vec.size() == 0) {
+      return;
+    }
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -350,7 +403,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   case qemu__handle_aiocb_rw: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
+      if (qemu_tid_requests.find(prev_id) == qemu_tid_requests.end()) {
+        return;
+      }
       auto &task_vec = qemu_tid_requests[prev_id];
+      if (task_vec.size() == 0) {
+        return;
+      }
       auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
       qrq->addEvent(std::move(event));
@@ -372,7 +431,13 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   case qemu__handle_aiocb_flush: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
+      if (qemu_tid_requests.find(prev_id) == qemu_tid_requests.end()) {
+        return;
+      }
       auto &task_vec = qemu_tid_requests[prev_id];
+      if (task_vec.size() == 0) {
+        return;
+      }
       auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
       qrq->addEvent(std::move(event));

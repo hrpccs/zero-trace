@@ -9,6 +9,7 @@
 #include "qemu_uprobe.skel.h"
 #include "utils.h"
 #include "vsockutils.h"
+#include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <memory>
@@ -29,7 +30,7 @@ struct TraceConfig {
     nvme_enable = 1;
     filemap_enable = 0;
     iomap_enable = 1;
-    sched_enable = 1;
+    sched_enable = 0;
     virtio_enable = 1;
     task_name = "";
     pid = 0;
@@ -160,11 +161,13 @@ public:
   IOTracer(std::unique_ptr<DoneRequestHandler> handler)
       : done_request_handler(std::move(handler)), config() {
     exiting = false;
+    sem_init(&sem, 0, 0);
   }
 
   IOTracer(std::unique_ptr<DoneRequestHandler> handler, TraceConfig &&config)
       : done_request_handler(std::move(handler)), config(std::move(config)) {
     exiting = false;
+    sem_init(&sem, 0, 0);
   }
 
   ~IOTracer() {
@@ -178,203 +181,8 @@ public:
     if (qemu_skel) {
       qemu_uprobe_bpf::destroy(qemu_skel);
     }
+    sem_destroy(&sem);
   }
-
-  void Logger() {
-    while (!exiting) {
-      std::shared_ptr<Request> request;
-      sem_wait(&request_to_log_queue.sem);
-      {
-        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
-        if (request_to_log_queue.results.empty()) {
-          continue;
-        }
-        request = request_to_log_queue.results.front();
-        request_to_log_queue.results.pop();
-      }
-      auto &bio_info = request->io_statistics;
-      for(auto &bio : bio_info){
-        if(bio.isVirtIO){
-          fprintf(stdout,"virtio offset %lld nr_bytes %lld\n", bio.offset, bio.nr_bytes);
-        }
-      }
-      done_request_handler->HandleDoneRequest(request, config);
-    }
-  }
-
-  bool findAndMergeQemuRq(std::shared_ptr<Request> &request) {
-    long long offset = request->guest_offset_time;
-
-    auto &bio_info = request->io_statistics;
-    auto bio_it = bio_info.begin();
-
-    unsigned long virtblk_offset = 0;
-    unsigned int virtblk_nr_bytes = 0;
-
-    while(bio_it != bio_info.end()) {
-      auto &bio = *bio_it;
-      if(!bio.isVirtIO){
-        bio_it++;
-        continue;
-      }
-
-    }
-
-    for (int i = 0; i < request->events.size(); i++) {
-    }
-  }
-
-  void HostAgent() { // connect
-    ServerEngine server;
-    while (exiting) {
-      Type type;
-      void *data;
-      server.recvMesg(type, data);
-      if (type == TYPE_timestamps) {
-        server.getDeltaHelper();
-      } else if (type == TYPE_Request) {
-        std::shared_ptr<Request> request =
-            std::shared_ptr<Request>((Request *)data);
-        // 把刚刚反序列化的 request 先保存着
-        // 直接从 native_request_queue 里面取出来
-      }
-    }
-  }
-
-  void GuestAgent() { // connect
-    ClientEngine client_engine;
-    constexpr long long sync_timeout = 1e9 * 10; // 10s
-    long long last_sync_time = 0;
-    long long offset;
-    while (!exiting) {
-      std::shared_ptr<Request> request;
-      sem_wait(&request_to_log_queue.sem);
-      {
-        long long curr = get_timestamp();
-        if (curr - last_sync_time > sync_timeout) {
-          offset = client_engine.getDelta();
-          last_sync_time = curr;
-        }
-        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
-        request = request_to_log_queue.results.front();
-        request_to_log_queue.results.pop();
-        request->guest_offset_time = offset;
-        int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
-        fprintf(stdout, "send request to guest, len: %d\n", ret);
-      }
-    }
-  }
-
-  void AddEvent(void *data, size_t data_size);
-  static int AddTrace(void *ctx, void *data, size_t data_size) {
-    IOTracer *tracer = (IOTracer *)ctx;
-    tracer->AddEvent(data, data_size);
-    return 0;
-  }
-
-
-  void openBPF() {
-    LIBBPF_OPTS(bpf_object_open_opts, open_opts);
-    int err;
-    libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-    open_opts.btf_custom_path = "/sys/kernel/btf/vmlinux";
-    skel = iotrace_bpf::open(&open_opts);
-    if (!skel) {
-      fprintf(stderr, "Failed to open and load BPF skeleton\n");
-      exit(1);
-    }
-
-    if (run_type ==  RUN_AS_HOST) {
-      qemu_skel = qemu_uprobe_bpf::open(&open_opts);
-      if (!qemu_skel) {
-        fprintf(stderr, "Failed to open and load BPF skeleton\n");
-        exit(1);
-      }
-    }
-  }
-
-  void configBPF() {
-    if (config.asGuest && config.asHost) {
-      fprintf(stderr, "can not run as guest and host at the same time\n");
-      exit(1);
-    }
-    run_type = RUN_STANDALONE;
-    config.qemu_enable = 0;
-    if (config.asGuest) {
-      run_type = RUN_AS_GUEST;
-      config.virtio_enable = 1;
-    }
-    if (config.asHost) {
-      run_type = RUN_AS_HOST;
-      config.qemu_enable = 1;
-      if (config.pid == 0) {
-        fprintf(stderr, "qemu pid is not set\n");
-        exit(1);
-      }
-    }
-  }
-
-  void loadAndAttachBPF() {
-    skel->bss->qemu_enable = config.qemu_enable;
-    skel->bss->syscall_enable = config.syscall_enable;
-    skel->bss->vfs_enable = config.vfs_enable;
-    skel->bss->block_enable = config.block_enable;
-    skel->bss->scsi_enable = config.scsi_enable;
-    skel->bss->nvme_enable = config.nvme_enable;
-    skel->bss->filemap_enable = config.filemap_enable;
-    skel->bss->iomap_enable = config.iomap_enable;
-    skel->bss->sched_enable = config.sched_enable;
-    skel->bss->virtio_enable = config.virtio_enable;
-    config.getFilterConfig(&skel->bss->filter_config);
-    int err = iotrace_bpf::load(skel);
-    if (err) {
-      fprintf(stderr, "Failed to load and verify iotrace skeleton\n");
-      exit(1);
-    }
-    err = iotrace_bpf::attach(skel);
-    if (err) {
-      fprintf(stderr, "Failed to attach iotrace skeleton\n");
-      exit(1);
-    }
-    if (run_type == RUN_AS_HOST) {
-      err = qemu_uprobe_bpf::load(qemu_skel);
-      if (err) {
-        fprintf(stderr, "Failed to load and verify qemu skeleton\n");
-        exit(1);
-      }
-      err = qemu_uprobe_bpf::attach(qemu_skel);
-      if (err) {
-        fprintf(stderr, "Failed to attach qemu skeleton\n");
-        exit(1);
-      }
-    }
-  }
-
-  void setuptLogger() {
-    std::thread t(&IOTracer::Logger, this);
-    t.detach();
-  }
-
-  void startTracing(void *ctx) {
-    int err;
-    setup_timestamp = get_timestamp();
-    int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
-    rb = ring_buffer__new(rb_fd, IOTracer::AddTrace, ctx, nullptr);
-    if (!rb) {
-      fprintf(stderr, "Failed to create ring buffer\n");
-      exit(1);
-    }
-    while (!exiting) {
-      err = ring_buffer__poll(rb, 100);
-      if (err < 0) {
-        fprintf(stderr, "Failed to consume ring buffer\n");
-        exit(1);
-      }
-    }
-  }
-
-  void stopTracing() { exiting = true; }
-
   int static debug(void *ctx, void *data, size_t data_size) {
     struct event *e = (struct event *)data;
     if (e->info_type == qemu_layer) {
@@ -468,19 +276,292 @@ public:
     return 0;
   }
 
-  void HandleDoneRequest(std::shared_ptr<Request> req) {
-    if (run_type == RUN_AS_HOST) {
+  void Logger() {
+    while (!exiting) {
+      std::shared_ptr<Request> request;
+      sem_wait(&request_to_log_queue.sem);
+      fprintf(stdout, "get request to be log out\n");
+      {
+        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+        if (request_to_log_queue.results.empty()) {
+          continue;
+        }
+        request = request_to_log_queue.results.front();
+        request_to_log_queue.results.pop();
+      }
+      done_request_handler->HandleDoneRequest(request, config);
+    }
+  }
 
-      std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
-      auto& ioinfo = req->io_statistics;
-      request_to_log_queue.results.push(req);
-      // req->host_syscall_offset
-      // req->host_syscall_nr_bytes
-      // req->virtblk_guest_offset
-      // req->virtblk_nr_bytes
-      fprintf(stdout,"guest offset %lld nr_bytes %lld\n", req->virtblk_guest_offset, req->virtblk_nr_bytes);;
-      fprintf(stdout,"host offset %lld nr_bytes %lld\n", req->host_syscall_offset, req->host_syscall_nr_bytes);;
+  auto findAndMergeQemuRq(std::shared_ptr<Request> &guest_request) {
+    long long offset = guest_request->guest_offset_time;
+
+    auto merged_request = std::make_shared<Request>();
+
+    auto &bio_info = guest_request->io_statistics;
+    auto bio_it = bio_info.begin();
+
+    // make sure will merge all event from guest_request
+    int merged_idx = 0;
+    while (bio_it != bio_info.end()) {
+      auto &bio = *bio_it;
+      if (!bio.isVirtIO) {
+        bio_it++;
+        continue;
+      }
+      unsigned long virtblk_offset = 0;
+      unsigned int virtblk_nr_bytes = 0;
+      int issue_idx = 0;
+      int done_idx = 0;
+      virtblk_offset = bio.offset;
+      virtblk_nr_bytes = bio.nr_bytes;
+      issue_idx = bio.issue_idx_in_request;
+      done_idx = bio.done_idx_in_request;
+
+      // try to fine a host qemu request that fit into the hole for every
+      // possible virtio request
+      while (true) {
+        std::lock_guard<std::mutex> lock(native_request_queue.mutex);
+        if (native_request_queue.results.empty()) {
+          break;
+        }
+        auto host_qemu_request = native_request_queue.results.front();
+        native_request_queue.results.pop();
+        // check if host_qemu_request fit into the hole
+        if (virtblk_nr_bytes == host_qemu_request->virtblk_nr_bytes &&
+            virtblk_offset == host_qemu_request->virtblk_guest_offset) {
+          unsigned long long start_time = host_qemu_request->start_time;
+          unsigned long long end_time = host_qemu_request->end_time;
+          unsigned long long issue_time, done_time;
+          while (merged_idx <= issue_idx) {
+            guest_request->events[merged_idx]->timestamp -=
+                guest_request->guest_offset_time;
+            merged_request->addEvent(
+                std::move(guest_request->events[merged_idx]));
+            merged_idx++;
+          }
+          issue_time = guest_request->events[issue_idx]->timestamp;
+          done_time = guest_request->events[done_idx]->timestamp -
+                      guest_request->guest_offset_time;
+
+          if (issue_time < start_time && done_time > end_time) {
+            fprintf(stdout, "perfect fit\n");
+          } else {
+            fprintf(stdout, "not perfect fit\n");
+            fprintf(stdout,
+                    "issue time %lld, start time %lld, done time %lld, end "
+                    "time %lld\n",
+                    issue_time, start_time, done_time, end_time);
+          }
+
+          // add events in qrq to merged_request
+          for (int i = 0; i < host_qemu_request->events.size(); i++) {
+            merged_request->addEvent(std::move(host_qemu_request->events[i]));
+          }
+          merged_idx = done_idx;
+          break;
+        }
+      }
+      bio_it++;
+    }
+
+    while (merged_idx < guest_request->events.size()) {
+      guest_request->events[merged_idx]->timestamp -=
+          guest_request->guest_offset_time;
+      merged_request->addEvent(std::move(guest_request->events[merged_idx]));
+      merged_idx++;
+    }
+
+    return merged_request;
+  }
+
+  void HostAgent() { // connect
+    ServerEngine server;
+    sem_post(&sem);
+    fprintf(stdout,"guest connected\n");
+    while (exiting) {
+      Type type;
+      void *data;
+      server.recvMesg(type, data);
+      if (type == TYPE_timestamps) {
+        fprintf(stdout,"get timestamps\n");
+        server.getDeltaHelper();
+      } else if (type == TYPE_Request) {
+        fprintf(stdout,"get request\n");
+        std::shared_ptr<Request> request =
+            std::shared_ptr<Request>((Request *)data);
+        // 把刚刚反序列化的 request 先保存着
+        // 直接从 native_request_queue 里面取出来
+        auto newRq = findAndMergeQemuRq(request);
+        {
+          std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+          request_to_log_queue.results.push(newRq);
+          sem_post(&request_to_log_queue.sem);
+        }
+      }
+    }
+  }
+
+  void GuestAgent() { // connect
+    ClientEngine client_engine;
+    fprintf(stdout,"host connected\n");
+    constexpr long long sync_timeout = 1e9 * 10; // 10s
+    long long last_sync_time = 0;
+    long long offset;
+    while (!exiting) {
+      std::shared_ptr<Request> request;
+      sem_wait(&request_to_log_queue.sem);
+      fprintf(stdout, "get request from log\n");
+      {
+        long long curr = get_timestamp();
+        if (curr - last_sync_time > sync_timeout) {
+          offset = client_engine.getDelta();
+          last_sync_time = curr;
+        }
+        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+        request = request_to_log_queue.results.front();
+        request_to_log_queue.results.pop();
+        request->guest_offset_time = offset;
+        int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
+        fprintf(stdout, "send request to guest, len: %d\n", ret);
+      }
+    }
+  }
+
+  void AddEvent(void *data, size_t data_size);
+  static int AddTrace(void *ctx, void *data, size_t data_size) {
+    IOTracer *tracer = (IOTracer *)ctx;
+    tracer->AddEvent(data, data_size);
+    return 0;
+  }
+
+  void openBPF() {
+    LIBBPF_OPTS(bpf_object_open_opts, open_opts);
+    int err;
+    libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+    open_opts.btf_custom_path = "/sys/kernel/btf/vmlinux";
+    skel = iotrace_bpf::open(&open_opts);
+    if (!skel) {
+      fprintf(stderr, "Failed to open and load BPF skeleton\n");
+      exit(1);
+    }
+
+    if (run_type == RUN_AS_HOST) {
+      qemu_skel = qemu_uprobe_bpf::open(&open_opts);
+      if (!qemu_skel) {
+        fprintf(stderr, "Failed to open and load BPF skeleton\n");
+        exit(1);
+      }
+    }
+  }
+
+  void configBPF() {
+    if (config.asGuest && config.asHost) {
+      fprintf(stderr, "can not run as guest and host at the same time\n");
+      exit(1);
+    }
+    run_type = RUN_STANDALONE;
+    config.qemu_enable = 0;
+    if (config.asGuest) {
+      run_type = RUN_AS_GUEST;
+      config.virtio_enable = 1;
+    }
+    if (config.asHost) {
+      run_type = RUN_AS_HOST;
+      config.qemu_enable = 1;
+      if (config.pid == 0) {
+        fprintf(stderr, "qemu pid is not set\n");
+        exit(1);
+      }
+    }
+  }
+
+  void loadAndAttachBPF() {
+    skel->bss->qemu_enable = config.qemu_enable;
+    skel->bss->syscall_enable = config.syscall_enable;
+    skel->bss->vfs_enable = config.vfs_enable;
+    skel->bss->block_enable = config.block_enable;
+    skel->bss->scsi_enable = config.scsi_enable;
+    skel->bss->nvme_enable = config.nvme_enable;
+    skel->bss->filemap_enable = config.filemap_enable;
+    skel->bss->iomap_enable = config.iomap_enable;
+    skel->bss->sched_enable = config.sched_enable;
+    skel->bss->virtio_enable = config.virtio_enable;
+    config.getFilterConfig(&skel->bss->filter_config);
+    int err = iotrace_bpf::load(skel);
+    if (err) {
+      fprintf(stderr, "Failed to load and verify iotrace skeleton\n");
+      exit(1);
+    }
+    err = iotrace_bpf::attach(skel);
+    if (err) {
+      fprintf(stderr, "Failed to attach iotrace skeleton\n");
+      exit(1);
+    }
+    if (run_type == RUN_AS_HOST) {
+      err = qemu_uprobe_bpf::load(qemu_skel);
+      if (err) {
+        fprintf(stderr, "Failed to load and verify qemu skeleton\n");
+        exit(1);
+      }
+      err = qemu_uprobe_bpf::attach(qemu_skel);
+      if (err) {
+        fprintf(stderr, "Failed to attach qemu skeleton\n");
+        exit(1);
+      }
+    }
+  }
+
+  void setuptLogger() {
+    std::thread t(&IOTracer::Logger, this);
+    t.detach();
+  }
+
+  void setupHostAgent() {
+    std::thread t(&IOTracer::HostAgent, this);
+    t.detach();
+  }
+
+  void setupGuestAgent() {
+    std::thread t(&IOTracer::GuestAgent, this);
+    t.detach();
+  }
+
+  void startTracing(void *ctx) {
+    int err;
+    sem_wait(&sem);
+    setup_timestamp = get_timestamp();
+    int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
+    rb = ring_buffer__new(rb_fd, IOTracer::AddTrace, ctx, nullptr);
+    if (!rb) {
+      fprintf(stderr, "Failed to create ring buffer\n");
+      exit(1);
+    }
+    while (!exiting) {
+      err = ring_buffer__poll(rb, 100);
+      if (err < 0) {
+        fprintf(stderr, "Failed to consume ring buffer\n");
+        exit(1);
+      }
+    }
+  }
+
+  // void setupWorker() {
+  //   std::thread t(&IOTracer::startTracing, this);
+  //   t.detach();
+  // }
+
+  void stopTracing() { exiting = true; }
+
+  void HandleDoneRequest(std::shared_ptr<Request> req) {
+
+    if (run_type == RUN_AS_HOST) {
+      // 把请求先暂存到 native_request_queue 里面
+      std::lock_guard<std::mutex> lock(native_request_queue.mutex);
+      auto &ioinfo = req->io_statistics;
+      native_request_queue.results.push(req);
     } else {
+      // 直接把请求输出到 log
       unsigned long long total_time = req->end_time - req->start_time;
       double ms = total_time / 1000000.0;
       if (ms > config.time_threshold) {
@@ -490,7 +571,25 @@ public:
         return;
       }
     }
+  }
 
+  void start() {
+    configBPF();
+    if (run_type == RUN_AS_HOST) {
+      setuptLogger();
+      setupHostAgent();
+    } else if (run_type == RUN_AS_GUEST) {
+      setupGuestAgent();
+    } else if (run_type == RUN_STANDALONE) {
+      setuptLogger();
+    } else {
+      fprintf(stderr, "run type error\n");
+      exit(1);
+    }
+
+    openBPF();
+    loadAndAttachBPF();
+    startTracing(this);
   }
 
   void HandleBlockEvent(struct event *data);
@@ -504,6 +603,7 @@ public:
   enum RunType { RUN_AS_GUEST, RUN_AS_HOST, RUN_STANDALONE };
   RunType run_type = RUN_STANDALONE;
   bool exiting;
+  sem_t sem;
   struct iotrace_bpf *skel;
   struct qemu_uprobe_bpf *qemu_skel;
   struct ring_buffer *rb;
@@ -514,7 +614,8 @@ public:
   std::unordered_map<int, std::shared_ptr<Request>> requests;
   std::unordered_map<int, std::shared_ptr<Request>> bio_requests;
   std::unordered_map<int, std::shared_ptr<Request>> rq_requests;
-  using qemuTaskVector = std::vector<std::pair<long long, std::shared_ptr<Request>>>;
-  std::unordered_map<int,qemuTaskVector> qemu_tid_requests;
+  using qemuTaskVector =
+      std::vector<std::pair<long long, std::shared_ptr<Request>>>;
+  std::unordered_map<int, qemuTaskVector> qemu_tid_requests;
   long long setup_timestamp = 0;
 };
