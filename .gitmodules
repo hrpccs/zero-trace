@@ -1,4 +1,5 @@
 [submodule "qemu"]
     path = qemu 
     url = https://github.com/qemu/qemu.git
+	branch = v4.2.1
     checkout = v4.2.1
