@@ -13,7 +13,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
-#define DEBUG 1
+// #define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -220,9 +220,12 @@ int BPF_KPROBE_SYSCALL(trace_read, int fd, void *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
-    bpf_debug("qemu untracked read enter\n");
-    return 0;
+  if(qemu_enable){ // check offset
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL ){
+      bpf_debug("qemu untracked pread64 enter \n");
+      return 0;
+    }
   }
 
   ino_t inode = 0;
@@ -263,10 +266,6 @@ int BPF_KRETPROBE(trace_read_ret, int ret) {
     return 0;
   }
 
-  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
-    bpf_debug("qemu untracked read exit\n");
-    return 0;
-  }
 
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
@@ -301,9 +300,12 @@ int BPF_KSYSCALL(write, int fd, void *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
-    bpf_debug("qemu untracked write enter\n");
-    return 0;
+  if(qemu_enable){ // check offset
+    long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL ){
+      bpf_debug("qemu untracked write enter \n");
+      return 0;
+    }
   }
   ino_t inode = 0;
   ino_t dir_inode = 0;
@@ -340,10 +342,7 @@ int BPF_KRETPROBE(write_ret,int ret) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
-  if(qemu_enable){ // qemu 维护虚拟磁盘时不会用这个系统调用
-    bpf_debug("qemu untracked write exit\n");
-    return 0;
-  }
+
   int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
   if(tid_syscall_enter == NULL){
     // bpf_debug("write exit without enter\n");
@@ -371,13 +370,17 @@ int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
   if (!syscall_enable) {
     return 0;
   }
-  if(qemu_enable){
-    bpf_debug("qemu untracked readv enter\n");
-    return 0;
-  }
 
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  if(qemu_enable){
+    int* offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL ){
+      bpf_debug("qemu untracked readv enter \n");
+      return 0;
+    }
     return 0;
   }
   ino_t inode = 0;
@@ -410,10 +413,6 @@ int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
 SEC("kretsyscall/readv")
 int BPF_KRETPROBE(readv_ret,int ret) {
   if (!syscall_enable) {
-    return 0;
-  }
-  if(qemu_enable){
-    bpf_debug("qemu untracked readv exit\n");
     return 0;
   }
   pid_t tgid, tid;
@@ -449,13 +448,17 @@ int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
   if (!syscall_enable) {
     return 0;
   }
-  if(qemu_enable){
-    bpf_debug("qemu untracked writev enter\n");
-    return 0;
-  }
 
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  if(qemu_enable){
+    int* offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
+    if(offset_ref == NULL ){
+      bpf_debug("qemu untracked writev enter \n");
+      return 0;
+    }
     return 0;
   }
 
@@ -489,10 +492,6 @@ int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
 SEC("kretsyscall/writev")
 int BPF_KRETPROBE(writev_ret,int ret) {
   if (!syscall_enable) {
-    return 0;
-  }
-  if(qemu_enable){
-    bpf_debug("qemu untracked writev exit\n");
     return 0;
   }
   pid_t tgid, tid;
@@ -535,7 +534,7 @@ int BPF_KPROBE_SYSCALL(pread64, int fd, void *buf, size_t count,
 
   if(qemu_enable){ // check offset
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
-    if(offset_ref == NULL || offset != *offset_ref){
+    if(offset_ref == NULL){
       bpf_debug("qemu untracked pread64 enter %lx\n", offset);
       return 0;
     }
@@ -612,7 +611,7 @@ int BPF_KPROBE_SYSCALL(pwrite64, int fd, void *buf, size_t count,
   }
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
-    if(offset_ref == NULL || offset != *offset_ref){
+    if(offset_ref == NULL ){
       bpf_debug("qemu untracked pwrite64 enter %lx\n", offset);
       return 0;
     }
@@ -690,7 +689,7 @@ int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen, lo
   }
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
-    if(offset_ref == NULL || offset != *offset_ref){
+    if(offset_ref == NULL ){
       bpf_debug("qemu untracked preadv enter %lx\n", offset);
       return 0;
     }
@@ -770,7 +769,7 @@ int BPF_KPROBE_SYSCALL(pwritev, int fd, struct iovec *vec, unsigned long vlen,
 
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
-    if(offset_ref == NULL || offset != *offset_ref){
+    if(offset_ref == NULL ){
       bpf_debug("qemu untracked pwritev enter %lx\n", offset);
       return 0;
     }

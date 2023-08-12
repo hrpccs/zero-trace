@@ -314,44 +314,44 @@ public:
         }
         auto host_qemu_request = native_request_queue.results.front();
         native_request_queue.results.pop();
-          unsigned long long start_time = host_qemu_request->start_time;
-          unsigned long long end_time = host_qemu_request->end_time;
-          unsigned long long issue_time, done_time;
-          issue_time = guest_request->events[issue_idx]->timestamp -
-                       guest_request->guest_offset_time;
-          done_time = guest_request->events[done_idx]->timestamp -
-                      guest_request->guest_offset_time;
-        if(!(issue_time < start_time && done_time > end_time)){
+        unsigned long long start_time = host_qemu_request->start_time;
+        unsigned long long end_time = host_qemu_request->end_time;
+        unsigned long long issue_time, done_time;
+        issue_time = guest_request->events[issue_idx]->timestamp -
+                     guest_request->guest_offset_time;
+        done_time = guest_request->events[done_idx]->timestamp -
+                    guest_request->guest_offset_time;
+        if (!(issue_time < start_time && done_time > end_time)) {
           continue;
         }
 
-        printf("virtio request: offset: %lu, nr_bytes: %u, issue_idx: %d, "
-               "done_idx: %d\n",
-               virtblk_offset, virtblk_nr_bytes, issue_idx, done_idx);
-        printf("host qemu request: offset: %lu, nr_bytes: %u, start_time: %llu, "
-               "end_time: %llu\n",
-               host_qemu_request->virtblk_guest_offset,
-               host_qemu_request->virtblk_nr_bytes, start_time, end_time);
-        for(int i = 0; i < host_qemu_request->events.size(); i++){
-          printf("host qemu request event: %s, timestamp: %llu\n", kernel_hook_type_str[host_qemu_request->events[i]->event_type], host_qemu_request->events[i]->timestamp);
-        }
+        // printf("virtio request: offset: %lu, nr_bytes: %u, issue_idx: %d, "
+        //        "done_idx: %d\n",
+        //        virtblk_offset, virtblk_nr_bytes, issue_idx, done_idx);
+        // printf(
+        //     "host qemu request: offset: %lu, nr_bytes: %u, start_time: %llu, "
+        //     "end_time: %llu\n",
+        //     host_qemu_request->virtblk_guest_offset,
+        //     host_qemu_request->virtblk_nr_bytes, start_time, end_time);
+        // for (int i = 0; i < host_qemu_request->events.size(); i++) {
+        //   printf("host qemu request event: %s, timestamp: %llu\n",
+        //          kernel_hook_type_str[host_qemu_request->events[i]->event_type],
+        //          host_qemu_request->events[i]->timestamp);
+        // }
         // check if host_qemu_request fit into the hole
-        if (virtblk_nr_bytes == host_qemu_request->virtblk_nr_bytes &&
-            virtblk_offset == host_qemu_request->virtblk_guest_offset) {
-          while (merged_idx <= issue_idx) {
-            guest_request->events[merged_idx]->timestamp -=
-                guest_request->guest_offset_time;
-            merged_request->addEvent(
-                std::move(guest_request->events[merged_idx]));
-            merged_idx++;
-          }
-          // add events in qrq to merged_request
-          for (int i = 0; i < host_qemu_request->events.size(); i++) {
-            merged_request->addEvent(std::move(host_qemu_request->events[i]));
-          }
-          merged_idx = done_idx;
-          break;
+        while (merged_idx <= issue_idx) {
+          guest_request->events[merged_idx]->timestamp -=
+              guest_request->guest_offset_time;
+          merged_request->addEvent(
+              std::move(guest_request->events[merged_idx]));
+          merged_idx++;
         }
+        // add events in qrq to merged_request
+        for (int i = 0; i < host_qemu_request->events.size(); i++) {
+          merged_request->addEvent(std::move(host_qemu_request->events[i]));
+        }
+        merged_idx = done_idx;
+        break;
       }
       bio_it++;
     }

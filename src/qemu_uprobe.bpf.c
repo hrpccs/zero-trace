@@ -20,7 +20,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 
 
-#define DEBUG 1
+// #define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -93,7 +93,7 @@ int BPF_KPROBE(trace_qemu_virtio_blk_handle_request,VirtIOBlockReq *req)
 			e->qemu_layer_info.virt_rq_addr = (long long)req;
 			e->qemu_layer_info.rq_type = is_write ? RQ_TYPE_WRITE : RQ_TYPE_READ;
 			e->qemu_layer_info.offset = offset;
-			//  bpf_debug("virtio_blk_handle_request %lx offset %llx\n", req, e->qemu_layer_info.offset);
+			 bpf_debug("virtio_blk_handle_request %lx offset %llx\n", req, e->qemu_layer_info.offset);
 			bpf_map_update_elem(&tid_offset_map,&tid,&offset,BPF_ANY);
 			bpf_ringbuf_submit(e, 0);
 			break;
@@ -150,7 +150,7 @@ int BPF_KPROBE(trace_qemu_virtio_blk_req_complete,VirtIOBlockReq *req)
 	e->qemu_layer_info.virt_rq_addr = (long long)req;
 	e->qemu_layer_info.rq_type = *ref;
 	bpf_ringbuf_submit(e, 0);
-	// bpf_debug("virtio_blk_req_complete %lx\n", req);
+	bpf_debug("virtio_blk_req_complete %lx\n", req);
 	return 0;
 }
 
@@ -182,6 +182,7 @@ int BPF_KPROBE(trace_qemu_blk_aio_pwritev, BlockBackend *blk, int64_t offset, QE
 	e->qemu_layer_info.tid = tid;
 	e->qemu_layer_info.offset = offset;
 	bpf_ringbuf_submit(e, 0);
+	bpf_debug("blk_aio_pwritev tid %d offset %llx\n",tid,offset);
 	return 0;
 }
 
@@ -211,6 +212,7 @@ int BPF_KPROBE(trace_qemu_blk_qio_preadv, BlockBackend *blk, int64_t offset, QEM
 	e->qemu_layer_info.tid = tid;
 	e->qemu_layer_info.offset = offset;
 	bpf_ringbuf_submit(e, 0);
+	bpf_debug("blk_aio_preadv tid %d offset %llx\n",tid,offset);
 	return 0;
 }
 
@@ -240,7 +242,7 @@ int BPF_KPROBE(trace_qemu_aio_flush, BlockBackend *blk)
 	e->qemu_layer_info.tid = tid;
 	e->qemu_layer_info.offset = *offset_ref;
 	bpf_ringbuf_submit(e, 0);
-	bpf_debug("blk_aio_flush\n");
+	bpf_debug("blk_aio_flush tid %d\n",tid);
 	return 0;
 }
 

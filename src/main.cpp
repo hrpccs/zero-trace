@@ -114,6 +114,5 @@ int main(int argc, char **argv) {
       std::unique_ptr<DoneRequestHandler>(new FileLogHandler(output_file));
   tracer = new IOTracer(std::move(logHandler), std::move(config));
   tracer->start();
-
   return 0;
 }

@@ -251,7 +251,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   // 由于一个 qemu 线程可以处理多个异步 io
   // 通过一个 tid 如何定位对应的 request ？
   // qemu_tid_requests[tid] 中列表的 back() 就是当前正在处理的 request
-  debug(NULL, e, sizeof(struct event));
+  // debug(NULL, e, sizeof(struct event));
   switch (e->event_type) {
   case qemu__virtio_blk_handle_request: {
     auto qrq = std::make_shared<Request>();
