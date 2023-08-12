@@ -1,6 +1,7 @@
 #pragma once
 #include "event_defs.h"
 #include "hook_point.h"
+#include <cassert>
 #include <cereal/archives/binary.hpp>
 #include <cereal/types/memory.hpp>
 #include <cereal/types/vector.hpp>
@@ -15,7 +16,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <cassert>
 
 class Event {
 public:
@@ -164,12 +164,11 @@ class Request {
   // asyncronous objects a request is identified by the first event a request is
   // ended by the last event
 public:
-  static unsigned long long request_id;
   Request() {
     id = this->request_id++;
     auto now = std::chrono::system_clock::now();
     std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    start_tm = *std::localtime(&now_time);
+    // start_tm = *std::localtime(&now_time);
   }
   virtual ~Request() {}
   virtual void addEvent(std::unique_ptr<Event> event) {
@@ -227,28 +226,6 @@ public:
     // virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
   }
 
-  unsigned long long id;
-  std::vector<std::unique_ptr<Event>> events;
-  int syscall_tid, syscall_pid;
-  int syscall_fd;
-  unsigned long syscall_dev, syscall_inode, syscall_dir_inode;
-  enum rq_type syscall_rq_type;
-  int syscall_ret;
-  unsigned long syscall_offset; // use in top level syscall
-  unsigned int syscall_bytes;   // use in top level syscall
-  bool isVirtIO = false;
-
-  // just for qemu
-  bool isQemuRq = false;
-  int qemu_tid;
-  enum rq_type qemu_rq_type;
-  // to match guest's dirver_rq_offset
-  unsigned long virtblk_guest_offset;
-  unsigned int virtblk_nr_bytes;
-  unsigned long host_syscall_offset;  // for subsyscall within qemu io
-  unsigned int host_syscall_nr_bytes; // for subsyscall within qemu io
-  unsigned long host_syscall_dev, host_syscall_inode, host_syscall_dir_inode;
-
   // for statistics
   struct IOStatistic {
     IOStatistic() {}
@@ -266,24 +243,49 @@ public:
     template <class Archive> void serialize(Archive &archive) {
       archive(bio_is_throttled, bio_is_bounce, bio_queue_time,
               bio_schedule_start_time, bio_schedule_end_time, bio_done_time,
-              offset, nr_bytes, isVirtIO, issue_idx_in_request,done_idx_in_request);
+              offset, nr_bytes, isVirtIO, issue_idx_in_request,
+              done_idx_in_request);
     }
   };
 
+  static unsigned long long request_id;
+  static double estimated_q2c;
+  static double estimated_q2d;
+  static double estimated_d2c;
+  unsigned long long id;
+  std::vector<std::unique_ptr<Event>> events;
+  int syscall_tid;
+  int syscall_pid;
+  int syscall_fd;
+  unsigned long syscall_dev;
+  unsigned long syscall_inode;
+  unsigned long  syscall_dir_inode;
+  enum rq_type syscall_rq_type;
+  int syscall_ret;
+  unsigned long syscall_offset; // use in top level syscall
+  unsigned int syscall_bytes;   // use in top level syscall
+  bool isVirtIO = false;
+  bool isQemuRq = false;
+  int qemu_tid;
+  enum rq_type qemu_rq_type;
+  unsigned long virtblk_guest_offset;
+  unsigned int virtblk_nr_bytes;
+  unsigned long host_syscall_offset;  // for subsyscall within qemu io
+  unsigned int host_syscall_nr_bytes; // for subsyscall within qemu io
+  unsigned long host_syscall_dev, host_syscall_inode, host_syscall_dir_inode;
   unsigned long long start_time;
   unsigned long long end_time;
   std::vector<IOStatistic> io_statistics;
-
-  std::tm start_tm;
   long long real_start_time;
   long long guest_offset_time;
 
   template <class Archive> void serialize(Archive &archive) {
-    archive(request_id, id, events, syscall_tid, syscall_pid, syscall_fd,
-            syscall_dev, syscall_inode, syscall_dir_inode, syscall_rq_type, syscall_ret,
-            syscall_offset, syscall_bytes, isVirtIO, isQemuRq,qemu_tid,qemu_rq_type,
-            virtblk_guest_offset, virtblk_nr_bytes, host_syscall_offset,
-            host_syscall_nr_bytes, start_time, end_time, io_statistics,
-            real_start_time, guest_offset_time,host_syscall_inode,host_syscall_dir_inode,host_syscall_dev);
+    archive(id, events, syscall_tid, syscall_pid, syscall_fd, syscall_dev,
+            syscall_inode, syscall_dir_inode, syscall_rq_type, syscall_ret,
+            syscall_offset, syscall_bytes, isVirtIO, isQemuRq, qemu_tid,
+            qemu_rq_type, virtblk_guest_offset, virtblk_nr_bytes,
+            host_syscall_offset, host_syscall_nr_bytes, start_time, end_time,
+            io_statistics, real_start_time, guest_offset_time,
+            host_syscall_inode, host_syscall_dir_inode, host_syscall_dev);
   }
 };

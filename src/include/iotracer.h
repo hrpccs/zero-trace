@@ -243,31 +243,19 @@ public:
       int tgid = e->block_layer_info.tgid;
       long long offset = e->block_layer_info.approximate_filemap_start_offset;
       long long len = e->block_layer_info.approximate_filemap_len;
-      fprintf(stdout,
-              "event type: %s, trigger type: %d, tid: %d, tgid: %d, offset: "
-              "%lld, len: %lld\n",
-              kernel_hook_type_str[type], trigger, tid, tgid, offset, len);
     } else if (e->info_type == nvme_layer) {
       int type = e->event_type;
       int trigger = e->trigger_type;
       int rq_id = e->nvme_layer_info.rq_id;
-      fprintf(stdout, "event type: %s, trigger type: %d, rq_id: %d\n",
-              kernel_hook_type_str[type], trigger, rq_id);
     } else if (e->info_type == scsi_layer) {
       int type = e->event_type;
       int trigger = e->trigger_type;
       int rq_id = e->scsi_layer_info.rq_id;
-      fprintf(stdout, "event type: %s, trigger type: %d, rq_id: %d\n",
-              kernel_hook_type_str[type], trigger, rq_id);
     } else if (e->info_type == virtio_layer) {
       int type = e->event_type;
       int trigger = e->trigger_type;
       int rq_id = e->virtio_layer_info.rq_id;
       unsigned int dev = e->virtio_layer_info.dev;
-      fprintf(stdout,
-              "event type: %s, trigger type: %d, rq_id: %d, sector: %lld, "
-              "nr_bytes: %lld, dev: %u\n",
-              kernel_hook_type_str[type], trigger, rq_id, 0, 0, dev);
     }
     // const char *event_type_str = kernel_hook_type_str[e->event_type];
     // const char *layer_type_str = info_type_str[e->info_type];
@@ -280,7 +268,6 @@ public:
     while (!exiting) {
       std::shared_ptr<Request> request;
       sem_wait(&request_to_log_queue.sem);
-      fprintf(stdout, "get request to be log out\n");
       {
         std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
         if (request_to_log_queue.results.empty()) {
@@ -327,12 +314,30 @@ public:
         }
         auto host_qemu_request = native_request_queue.results.front();
         native_request_queue.results.pop();
-        // check if host_qemu_request fit into the hole
-        if (virtblk_nr_bytes == host_qemu_request->virtblk_nr_bytes &&
-            virtblk_offset == host_qemu_request->virtblk_guest_offset) {
           unsigned long long start_time = host_qemu_request->start_time;
           unsigned long long end_time = host_qemu_request->end_time;
           unsigned long long issue_time, done_time;
+          issue_time = guest_request->events[issue_idx]->timestamp -
+                       guest_request->guest_offset_time;
+          done_time = guest_request->events[done_idx]->timestamp -
+                      guest_request->guest_offset_time;
+        if(!(issue_time < start_time && done_time > end_time)){
+          continue;
+        }
+
+        printf("virtio request: offset: %lu, nr_bytes: %u, issue_idx: %d, "
+               "done_idx: %d\n",
+               virtblk_offset, virtblk_nr_bytes, issue_idx, done_idx);
+        printf("host qemu request: offset: %lu, nr_bytes: %u, start_time: %llu, "
+               "end_time: %llu\n",
+               host_qemu_request->virtblk_guest_offset,
+               host_qemu_request->virtblk_nr_bytes, start_time, end_time);
+        for(int i = 0; i < host_qemu_request->events.size(); i++){
+          printf("host qemu request event: %s, timestamp: %llu\n", kernel_hook_type_str[host_qemu_request->events[i]->event_type], host_qemu_request->events[i]->timestamp);
+        }
+        // check if host_qemu_request fit into the hole
+        if (virtblk_nr_bytes == host_qemu_request->virtblk_nr_bytes &&
+            virtblk_offset == host_qemu_request->virtblk_guest_offset) {
           while (merged_idx <= issue_idx) {
             guest_request->events[merged_idx]->timestamp -=
                 guest_request->guest_offset_time;
@@ -340,20 +345,6 @@ public:
                 std::move(guest_request->events[merged_idx]));
             merged_idx++;
           }
-          issue_time = guest_request->events[issue_idx]->timestamp;
-          done_time = guest_request->events[done_idx]->timestamp -
-                      guest_request->guest_offset_time;
-
-          if (issue_time < start_time && done_time > end_time) {
-            fprintf(stdout, "perfect fit\n");
-          } else {
-            fprintf(stdout, "not perfect fit\n");
-            fprintf(stdout,
-                    "issue time %lld, start time %lld, done time %lld, end "
-                    "time %lld\n",
-                    issue_time, start_time, done_time, end_time);
-          }
-
           // add events in qrq to merged_request
           for (int i = 0; i < host_qemu_request->events.size(); i++) {
             merged_request->addEvent(std::move(host_qemu_request->events[i]));
@@ -372,24 +363,37 @@ public:
       merged_idx++;
     }
 
+    merged_request->start_time = merged_request->events[0]->timestamp;
+    merged_request->end_time =
+        merged_request->events[merged_request->events.size() - 1]->timestamp;
+    merged_request->io_statistics = guest_request->io_statistics;
+    merged_request->virtblk_nr_bytes = guest_request->virtblk_nr_bytes;
+    merged_request->virtblk_guest_offset = guest_request->virtblk_guest_offset;
+    merged_request->syscall_bytes = guest_request->syscall_bytes;
+    merged_request->syscall_offset = guest_request->syscall_offset;
+    merged_request->syscall_fd = guest_request->syscall_fd;
+    merged_request->syscall_dev = guest_request->syscall_dev;
+    merged_request->syscall_inode = guest_request->syscall_inode;
+    merged_request->syscall_dir_inode = guest_request->syscall_dir_inode;
+    merged_request->syscall_tid = guest_request->syscall_tid;
+
     return merged_request;
   }
 
   void HostAgent() { // connect
     ServerEngine server;
     sem_post(&sem);
-    fprintf(stdout,"guest connected\n");
+    // fprintf(stdout,"guest connected\n");
     while (!exiting) {
       Type type;
       void *data;
       server.recvMesg(type, data);
       if (type == TYPE_timestamps) {
-        fprintf(stdout,"get timestamps\n");
         server.getDeltaHelper();
       } else if (type == TYPE_Request) {
-        fprintf(stdout,"get request\n");
-        std::shared_ptr<Request> request =
-            std::shared_ptr<Request>((Request *)data);
+        Request *req = (Request *)data;
+        std::shared_ptr<Request> request(req);
+
         // 把刚刚反序列化的 request 先保存着
         // 直接从 native_request_queue 里面取出来
         auto newRq = findAndMergeQemuRq(request);
@@ -404,14 +408,13 @@ public:
 
   void GuestAgent() { // connect
     ClientEngine client_engine;
-    fprintf(stdout,"host connected\n");
-    constexpr long long sync_timeout = 1e9 * 10; // 10s
+    fprintf(stdout, "host connected\n");
+    constexpr long long sync_timeout = 1e9 * 0.1; // 10s
     long long last_sync_time = 0;
     long long offset;
     while (!exiting) {
       std::shared_ptr<Request> request;
       sem_wait(&request_to_log_queue.sem);
-      fprintf(stdout, "get request from log\n");
       {
         long long curr = get_timestamp();
         if (curr - last_sync_time > sync_timeout) {
@@ -419,14 +422,13 @@ public:
           last_sync_time = curr;
         }
         {
-        std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
-        request = request_to_log_queue.results.front();
-        request_to_log_queue.results.pop();
-        request->guest_offset_time = offset;
-        fprintf(stdout, "send request to guest\n");
-        int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
-        fprintf(stdout, "send request to guest, len: %d\n", ret);
+          std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
+          request = request_to_log_queue.results.front();
+          request_to_log_queue.results.pop();
+          request->guest_offset_time = offset;
 
+          Request *req = request.get();
+          int ret = client_engine.sendMesg(TYPE_Request, req); // FIXME:
         }
       }
     }
@@ -533,7 +535,7 @@ public:
 
   void startTracing(void *ctx) {
     int err;
-    if(run_type == RUN_AS_HOST){
+    if (run_type == RUN_AS_HOST) {
       sem_wait(&sem);
     }
     setup_timestamp = get_timestamp();
