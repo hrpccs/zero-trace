@@ -14,7 +14,9 @@
   - [3、发送/接收数据](#3发送/接收数据)
   - [4、时钟同步](#4时钟同步)
 - [四、环境可用性测试](#四环境可用性测试)
-  - [1、一个简单的框架](#1一个简单的框架)   
+  - [1、一个简单的框架](#1一个简单的框架) 
+  - [2、如何运行这个测试](#2如何运行这个测试) 
+  - [3、将这个测试运用到tracing中](#3将这个测试运用到tracing中) 
 - [附录A、如果想继续使用WSL,如何恢复使用?](#附录A如果想继续使用WSL,如何恢复使用?)
 - [参考资料](#参考资料)
 
@@ -339,7 +341,7 @@ $$
 
 ## 四、环境可用性测试
 
-### 1、一个简单的框架
+### 1、一个简单的测试框架
 
 ![image-20230810231536426](../gallery/environment&vsocks/image-20230810231536426.png)
 
@@ -361,21 +363,38 @@ namespace GuestThread
 };
 ```
 
-注意需要把`mythread.cpp`里面的`messageexp`改成对应的
+
 
 * `hook`是获取tracing信息以及传送给其他有关模块的函数,demo中使用每隔随机的时间,随机生成的办法.使用时肯定要根据需要进行修改
 * connect函数提供连接的功能,负责创建连接.
   * host的connect还负责接收guest发过来的消息,分为对时钟的消息(调用`getDeltaHelper`)和把tracing信息放入相应队列(并发安全有保证)
   * guest的connect负责定期发起对时钟请求,把tracing信息取出,校正时间和发送到host.注意对时钟的时间限制可以通过修改`TIMEOUT`(单位ns)来指定
-* visualize是可视化函数,执行可视化任务,本demo就直接输出了.且每次看队列中哪一个时间戳早就先可视化哪一个
+* visualize是可视化函数,执行可视化任务,本demo就直接输出到控制台了.且每次看远端和本地队列中哪一个时间戳早就先可视化哪一个
   * 注意,我们的messageexp只有一个时间戳.当把队列元素修改以后,如果是区间,可以比较结束时间
 
 ![image-20230810233517503](../gallery/environment&vsocks/image-20230810233517503.png)
 
 
+### 2、如何运行这个测试
 
+* 安装cereal.确保cereal文件夹被放在这个文件夹或者`/usr/include`中
+* `sudo bash build.sh`编译.如果提示缺少依赖,请自行安装
+* 用`scp`命令或者借助vscode等把可执行文件`client`移动到guest(QEMU)中
+    * 如果是在虚拟机中,用vscode中转时经过了Windows物理机,移动到QEMU之后要`chmod +x ./client`恢复权限
+* 在host(本机)运行server
+* 在guest(QEMU)运行client
+* 如果运行失败,很可能是QEMU启动的时候忘记添加vsock设备,请检查命令
+* 如果运行成功会见到下图所示,左侧是单调时钟的时间戳(单位ns),右侧是随机字符串(长度不大于65)
 
+[试一下你的vsock和cereal安装是否正常吧](../envtest/README.md)
 
+![pic](../gallery/environment&vsocks/image-envtest.png)
+
+### 3、将这个测试运用到tracing中
+
+该测试框架虽然简陋,但是能够判断vsock和cereal的工作状态.且已经反映了Tracing中各个进程之间的通信方式
+仅仅需要将其中"随机产生Tracing"的模块改为真实的eBPF最终模块,打印模块换成可视化模块(向Grafana发信息)
+就可以实现Tracing功能了
 
 ## 附录A、如果想继续使用WSL,如何恢复使用?
 
