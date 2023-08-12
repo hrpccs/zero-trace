@@ -2,9 +2,23 @@
 
 # 环境配置与vsock使用
 
-[TOC]
+- [一、eBPF环境配置](#一eBPF环境配置)
+- [二、virtio之QEMU环境配置](#二virtio之QEMU环境配置)
+  - [1、QEMU依赖的安装](#1QEMU依赖的安装)
+  - [2、内层虚拟机(QEMU)安装](#2内层虚拟机(QEMU)安装)
+  - [3、QEMU网络配置](#3QEMU网络配置)
+  - [4、安装序列化库cereal](#4安装序列化库cereal)
+- [三、使用方法](#三使用方法)
+  - [1、对需要传输的类进行序列化](#1对需要传输的类进行序列化)
+  - [2、为需要传输的类添加辅助函数](#2为需要传输的类添加辅助函数)
+  - [3、发送/接收数据](#3发送/接收数据)
+  - [4、时钟同步](#4时钟同步)
+- [四、环境可用性测试](#四环境可用性测试)
+  - [1、一个简单的框架](#1一个简单的框架)   
+- [附录A、如果想继续使用WSL,如何恢复使用?](#附录A如果想继续使用WSL,如何恢复使用?)
+- [参考资料](#参考资料)
 
-## 一.eBPF环境配置
+## 一、eBPF环境配置
 
 先安装Ubuntu 22.04LTS(20.04也可以,但是要手动升级内核到5.15)
 
@@ -24,9 +38,9 @@ sudo apt-get install -y make clang llvm libelf-dev linux-tools-$(uname -r)
 
 在不使用virtio(QEMU)时,只需要安装一次.如果使用virtio,在QEMU内部也需要安装一次
 
-## 二.virtio之QEMU环境配置
+## 二、virtio之QEMU环境配置
 
-### 1.QEMU依赖安装
+### 1、QEMU依赖的安装
 
 ```bash
 sudo apt-get install git libglib2.0-dev libfdt-dev libpixman-1-dev zlib1g-dev ninja-build
@@ -63,7 +77,7 @@ systemctl start sshd
 
 用ssh方法,借助VSCode,可以把镜像移动到虚拟机
 
-### 2.内层虚拟机(QEMU)安装
+### 2、内层虚拟机(QEMU)安装
 
 创建镜像
 
@@ -106,7 +120,7 @@ qemu-system-x86_64 -enable-kvm -m 3G -smp 2 -boot once=d -drive file=./ubuntu22.
 
 ![image-20230730202320768](../gallery/environment&vsocks/image-20230730202320768.png)
 
-### 3.QEMU网络配置
+### 3、QEMU网络配置
 
 QEMU有多种网络模式,默认的是user模式,它可以连接到外部网络,但是并不能被外部网络看见,就不能ssh进去.所以我们需要使用其他网络模式,比如tap模式
 
@@ -202,15 +216,15 @@ sudo route add default gw 192.168.2.128 dev ens3
 
 * 这样就可以用了.然后就可以和上文一样配置ssh
 
-### 4.安装序列化库cereal
+### 4、安装序列化库cereal
 
 `cereal`文件夹已经被放在`include`文件夹了,可以直接使用,无需额外操作
 
 * 如果在其他项目中也想使用,可以将`cereal`文件夹移动到`/usr/include`文件夹中
 
-## 二.使用方法
+## 三、使用方法
 
-### 1.对需要传输的类进行序列化
+### 1、对需要传输的类进行序列化
 
 使用例`testcase.h`针对STL,智能指针和继承的情况进行了举例.简单来讲有以下原则
 
@@ -250,7 +264,7 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Base, Derived2);
 
 * 几个例子详见`src/include/testcase.h`
 
-### 2.为需要传输的类添加辅助函数
+### 2、为需要传输的类添加辅助函数
 
 因为受到宏定义的限制,需要修改三处,都在`mesgtype.h`中
 
@@ -268,7 +282,7 @@ CEREAL_REGISTER_POLYMORPHIC_RELATION(Base, Derived2);
 
 
 
-### 3.发送/接收数据
+### 3、发送/接收数据
 
 我们已经将启动连接,关闭连接,序列化与反序列化等一系列功能进行了封装,成为一个类.只需要一套简单的send/recv操作,就可以实现数据的收发
 
@@ -302,9 +316,9 @@ int recvMesg(enum Type & type,void *& obj);
 
 
 
-### 4.对时钟
+### 4、时钟同步
 
-因为guest和host的时钟未必对齐,所以我们需要进行时钟对齐
+因为guest和host的时钟未必同步,所以我们需要对guest的时钟进行修正
 
 我们假设,传输同样的数据,guest发给host和host发给guest时间大致相同(对于vsock,因为不是真正走WAN,所以大体上可以保证这一点)
 
@@ -319,11 +333,13 @@ $$
 
 调用`getDelta`方法,可以获取这个差值
 
-与此同时,在对端需要设置,当收到`TYPE_timestamps`类型数据时,调用`getDeltaHelper`方法帮助对时钟
+与此同时,在另一端需要设置,当收到`TYPE_timestamps`类型数据时,调用`getDeltaHelper`方法帮助时钟同步
 
-对时钟功能使用的是单调时钟,防止调时间,闰秒等因素造成对钟失败
+时钟同步功能使用的是单调时钟,防止调时间,闰秒等因素造成对钟失败
 
-### 5.框架的用法
+## 四、环境可用性测试
+
+### 1、一个简单的框架
 
 ![image-20230810231536426](../gallery/environment&vsocks/image-20230810231536426.png)
 
@@ -356,7 +372,12 @@ namespace GuestThread
 
 ![image-20230810233517503](../gallery/environment&vsocks/image-20230810233517503.png)
 
-## 附录A.如果想继续使用WSL,如何恢复使用?
+
+
+
+
+
+## 附录A、如果想继续使用WSL,如何恢复使用?
 
 我执行了以下三个操作,但是到底哪一步有用,难以验证.可能是其某一个非空子集实际起到作用
 

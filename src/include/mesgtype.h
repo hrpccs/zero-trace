@@ -4,7 +4,7 @@
 #define SMALL_MESG_LIMIT_BYTES 10   //应该设置为4的倍数
 #define TIMEOUT_NS 60000000000LL    //long long类型
 
-#define TYPES 6
+#define TYPES 5
 
 //注意:在这里添加完类型以后,还要去vsockutils.cpp的RegisterHelper函数里面修改
 #define TYPE_DEF(X) \
