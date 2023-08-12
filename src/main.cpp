@@ -27,7 +27,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <utility>
-#include "test_vsock.h"
 
 unsigned long long Request::request_id = 0;
 Event::MemoryPool Event::memory_pool_;

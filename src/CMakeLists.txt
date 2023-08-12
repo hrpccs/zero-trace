@@ -91,6 +91,24 @@ ExternalProject_Add(libbpf
 )
 add_dependencies(iotracer libbpf)
 
+include(ExternalProject)
+set(CEREAL_ROOT     ${CMAKE_BINARY_DIR}/src/cereal)
+set(CEREAL_INCLUDE_DIR  ${CEREAL_ROOT}/include)
+
+set(CEREAL_INSTALL mv ${CEREAL_ROOT}/include/cereal ${CMAKE_SOURCE_DIR}/include)
+ExternalProject_Add(cereal
+    GIT_REPOSITORY https://github.com/USCiLab/cereal.git
+    PREFIX                  ${CMAKE_BINARY_DIR}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND  ""
+    INSTALL_COMMAND  ${CEREAL_INSTALL}
+)
+add_dependencies(iotracer cereal)
+
+
+include(ExternalProject)
+
+
 add_custom_target(vmlinux.h DEPENDS ${CMAKE_SOURCE_DIR}/include/vmlinux.h)
 add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/include/vmlinux.h 
