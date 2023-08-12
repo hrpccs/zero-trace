@@ -1,3 +1,4 @@
+#define TEST_VSOCK
 #include "mythreads.h"
 #include <string.h>
 #include <stdlib.h>

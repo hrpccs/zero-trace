@@ -70,7 +70,7 @@ class messageexp
         {
             char testbuf[70];
             timestamp = getCurrentMonoTime();
-            int len = rand() % 65;
+            int len = rand() % 65 + 1;
             for(int i = 0;i < len;i++)
             {
                 testbuf[i] = 'A' + rand() % 26;
