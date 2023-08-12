@@ -371,6 +371,10 @@ int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
   if (!syscall_enable) {
     return 0;
   }
+  if(qemu_enable){
+    bpf_debug("qemu untracked readv enter\n");
+    return 0;
+  }
 
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {

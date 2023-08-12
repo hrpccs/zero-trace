@@ -40,6 +40,9 @@ struct TraceConfig {
     cgroup_path = "";
     time_threshold = 10;
     timer_trigger_duration = 0;
+
+    asHost = false;
+    asGuest = false;
   }
 
   TraceConfig(TraceConfig &&config) {
@@ -62,6 +65,8 @@ struct TraceConfig {
     cgroup_path = std::move(config.cgroup_path);
     time_threshold = config.time_threshold;
     timer_trigger_duration = config.timer_trigger_duration;
+    asGuest = config.asGuest;
+    asHost = config.asHost;
   }
 
   void getFilterConfig(struct filter_config *config) {
@@ -105,8 +110,8 @@ struct TraceConfig {
     printf("run as guest: %d\n", asGuest);
   }
 
-  bool asHost;
-  bool asGuest;
+  bool asHost = false;
+  bool asGuest = false;
 
   // trace enble
   bool qemu_enable = 0;
@@ -445,16 +450,25 @@ public:
 
   void HandleDoneRequest(std::shared_ptr<Request> req) {
     if (run_type == RUN_AS_HOST) {
-      std::lock_guard<std::mutex> lock(native_request_queue.mutex);
-      native_request_queue.results.push(req);
+      // std::lock_guard<std::mutex> lock(native_request_queue.mutex);
+      // auto& ioinfo = req->io_statistics;
+      // for(int i = 0; i < ioinfo.size(); i++) {
+      //   fprintf(stdout,"isVirtIO %d offset %lld nr_bytes %lld\n", ioinfo[i].isVirtIO, ioinfo[i].offset, ioinfo[i].nr_bytes);
+      // }
+      // native_request_queue.results.push(req);
+      std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
       auto& ioinfo = req->io_statistics;
-      for(int i = 0; i < ioinfo.size(); i++) {
-        fprintf(stdout,"isVirtIO %d offset %lld nr_bytes %lld\n", ioinfo[i].isVirtIO, ioinfo[i].offset, ioinfo[i].nr_bytes);
-      }
+      request_to_log_queue.results.push(req);
+      // req->host_syscall_offset
+      // req->host_syscall_nr_bytes
+      // req->virtblk_guest_offset
+      // req->virtblk_nr_bytes
+      fprintf(stdout,"guest offset %lld nr_bytes %lld\n", req->virtblk_guest_offset, req->virtblk_nr_bytes);;
+      fprintf(stdout,"host offset %lld nr_bytes %lld\n", req->host_syscall_offset, req->host_syscall_nr_bytes);;
     } else {
       unsigned long long total_time = req->end_time - req->start_time;
       double ms = total_time / 1000000.0;
-      if (ms < config.time_threshold) {
+      if (ms > config.time_threshold) {
         std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
         request_to_log_queue.results.push(req);
         sem_post(&request_to_log_queue.sem);
@@ -485,6 +499,7 @@ public:
   std::unordered_map<int, std::shared_ptr<Request>> requests;
   std::unordered_map<int, std::shared_ptr<Request>> bio_requests;
   std::unordered_map<int, std::shared_ptr<Request>> rq_requests;
-  std::unordered_map<int, std::shared_ptr<Request>> qemu_tid_requests;
+  using qemuTaskVector = std::vector<std::pair<long long, std::shared_ptr<Request>>>;
+  std::unordered_map<int,qemuTaskVector> qemu_tid_requests;
   long long setup_timestamp = 0;
 };

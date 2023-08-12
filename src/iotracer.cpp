@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <ctime>
 #include <memory>
+#include <utility>
 
 void IOTracer::HandleBlockEvent(struct event *e) {
   if (e->event_type == kernel_hook_type::block__bio_queue) {
@@ -113,8 +114,8 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
       krq = std::make_shared<Request>();
       requests.insert(std::make_pair(tid, krq));
       krq->setSyscallInfo(e);
-    }
     krq->start_time = e->timestamp;
+    }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
   } else if (e->trigger_type == trigger_type::EXIT) {
@@ -128,9 +129,9 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
       krq->setRet(ret);
-      krq->end_time = e->timestamp;
       if (run_type != IOTracer::RUN_AS_HOST) {
         requests.erase(it);
+        krq->end_time = e->timestamp;
         HandleDoneRequest(krq);
       }
     }
@@ -240,141 +241,118 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   if (config.qemu_enable == false) {
     return;
   }
+  debug(NULL,e,0);
   int tid = e->qemu_layer_info.tid;
+    // 由于一个 qemu 线程可以处理多个异步 io
+  // 通过一个 tid 如何定位对应的 request ？
+  // qemu_tid_requests[tid] 中列表的 back() 就是当前正在处理的 request
   switch (e->event_type) {
   case qemu__virtio_blk_handle_request: {
-    e->trigger_type = trigger_type::ENTRY;
     auto qrq = std::make_shared<Request>();
     qrq->setQemuInfo(e);
     auto event = std::unique_ptr<Event>(new Event(e));
+    event->trigger_type = trigger_type::ENTRY;
     qrq->addEvent(std::move(event));
-    qemu_tid_requests[tid] = qrq;
+    qrq->start_time = e->timestamp;
+    auto task_vec_it = qemu_tid_requests.find(tid);
+    if(task_vec_it == qemu_tid_requests.end()){
+      qemu_tid_requests.insert(std::make_pair(tid, qemuTaskVector()));
+    }
+    task_vec_it = qemu_tid_requests.find(tid);
+    auto& task_vec = task_vec_it->second;
+    task_vec.push_back(std::make_pair(e->qemu_layer_info.virt_rq_addr,qrq));
     break;
   }
   case qemu__virtio_blk_req_complete: {
-    e->trigger_type = trigger_type::EXIT;
     auto it = qemu_tid_requests.find(tid);
     if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
+      auto& task_vec = it->second;
+      auto task_vec_it = task_vec.begin();
+      for(;task_vec_it != task_vec.end();task_vec_it++){
+        if(task_vec_it->first == e->qemu_layer_info.virt_rq_addr){
+          break;
+        }
       }
+      auto qrq = task_vec_it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
+      event->trigger_type = trigger_type::EXIT;
       qrq->addEvent(std::move(event));
       qrq->end_time = e->timestamp;
-      qemu_tid_requests.erase(it);
+      task_vec.erase(task_vec_it);
       HandleDoneRequest(qrq);
     }
     break;
   }
   case qemu__blk_aio_pwritev: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
-      qrq->qemu_rq_type = RQ_TYPE_WRITE;
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->qemu_rq_type = RQ_TYPE_WRITE;
     break;
   }
   case qemu__blk_aio_preadv: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
-      qrq->qemu_rq_type = RQ_TYPE_READ;
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->qemu_rq_type = RQ_TYPE_READ;
     break;
   }
   case qemu__blk_aio_flush: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
-      qrq->qemu_rq_type = RQ_TYPE_FLUSH;
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->qemu_rq_type = RQ_TYPE_FLUSH;
     break;
   }
   case qemu__qcow2_co_pwritev_part: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
-      qrq->setQemuInfo(e);
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->setQemuInfo(e);
     break;
   }
   case qemu__qcow2_co_preadv_part: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
       qrq->setQemuInfo(e);
-    }
     break;
   }
   case qemu__qcow2_co_flush_to_os: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      auto event = std::unique_ptr<Event>(new Event(e));
-      qrq->addEvent(std::move(event));
-      qrq->setQemuInfo(e);
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->setQemuInfo(e);
     break;
   }
   case qemu__raw_co_prw: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto qrq = it->second;
-      if (qrq == nullptr) {
-        return;
-      }
-      qrq->setQemuInfo(e);
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->setQemuInfo(e);
     break;
   }
   case qemu__raw_co_flush_to_disk: {
-    auto it = qemu_tid_requests.find(tid);
-    if (it != qemu_tid_requests.end()) {
-      auto krq = it->second;
-      if (krq == nullptr) {
-        return;
-      }
-      krq->setQemuInfo(e);
-    }
+    auto& task_vec = qemu_tid_requests[tid];
+    auto qrq = task_vec.back().second;
+    auto event = std::unique_ptr<Event>(new Event(e));
+    qrq->addEvent(std::move(event));
+    qrq->setQemuInfo(e);
     break;
   }
   case qemu__handle_aiocb_rw: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
+      auto& task_vec = qemu_tid_requests[prev_id];
+      auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
-      auto qrq = qemu_tid_requests[prev_id];
-      if (qrq == nullptr) {
-        return;
-      }
       qrq->addEvent(std::move(event));
       requests[tid] = qrq;
     } else if (e->trigger_type == trigger_type::EXIT) {
@@ -386,9 +364,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
         }
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
-        krq->end_time = e->timestamp;
         requests.erase(it);
-        HandleDoneRequest(krq);
       }
     }
     break;
@@ -396,11 +372,9 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   case qemu__handle_aiocb_flush: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
+      auto& task_vec = qemu_tid_requests[prev_id];
+      auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
-      auto qrq = qemu_tid_requests[prev_id];
-      if (qrq == nullptr) {
-        return;
-      }
       qrq->addEvent(std::move(event));
       requests[tid] = qrq;
     } else if (e->trigger_type == trigger_type::EXIT) {
@@ -412,9 +386,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
         }
         auto event = std::unique_ptr<Event>(new Event(e));
         krq->addEvent(std::move(event));
-        krq->end_time = e->timestamp;
         requests.erase(it);
-        HandleDoneRequest(krq);
       }
     }
     break;
