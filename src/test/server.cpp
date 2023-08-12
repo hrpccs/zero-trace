@@ -27,4 +27,3 @@ int runAsServer()
 
     return 0;
 }
-
