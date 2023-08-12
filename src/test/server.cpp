@@ -28,7 +28,3 @@ int runAsServer()
     return 0;
 }
 
-/*int main()
-{
-    return runAsServer();
-}*/
