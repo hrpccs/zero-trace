@@ -27,6 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <utility>
+#include "test_vsock.h"
 
 unsigned long long Request::request_id = 0;
 Event::MemoryPool Event::memory_pool_;
@@ -113,4 +114,10 @@ int main(int argc, char **argv) {
       std::unique_ptr<DoneRequestHandler>(new FileLogHandler(output_file));
   tracer = new IOTracer(std::move(logHandler), std::move(config));
   tracer->start();
+  // if(tracer->run_type == IOTracer::RUN_AS_GUEST){
+  //   runAsClient();
+  // }else {
+  //   runAsServer();
+  // }
+  return 0;
 }

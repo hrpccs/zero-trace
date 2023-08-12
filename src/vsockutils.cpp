@@ -77,7 +77,6 @@ int VSockEngine::recvstr(char *& str,enum Type & type,int & len)
     if(ret != len1)
     {
         fprintf(stderr,"read header error\n");
-        abort();
     }
 
     type = (enum Type)header[0];
@@ -94,7 +93,6 @@ int VSockEngine::recvstr(char *& str,enum Type & type,int & len)
         if(ret != len)
         {
             fprintf(stderr,"read error\n");
-            abort();
         }
 
     

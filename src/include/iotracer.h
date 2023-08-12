@@ -379,7 +379,7 @@ public:
     ServerEngine server;
     sem_post(&sem);
     fprintf(stdout,"guest connected\n");
-    while (exiting) {
+    while (!exiting) {
       Type type;
       void *data;
       server.recvMesg(type, data);
@@ -418,12 +418,16 @@ public:
           offset = client_engine.getDelta();
           last_sync_time = curr;
         }
+        {
         std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
         request = request_to_log_queue.results.front();
         request_to_log_queue.results.pop();
         request->guest_offset_time = offset;
+        fprintf(stdout, "send request to guest\n");
         int ret = client_engine.sendMesg(TYPE_Request, &request); // FIXME:
         fprintf(stdout, "send request to guest, len: %d\n", ret);
+
+        }
       }
     }
   }
@@ -529,7 +533,9 @@ public:
 
   void startTracing(void *ctx) {
     int err;
-    sem_wait(&sem);
+    if(run_type == RUN_AS_HOST){
+      sem_wait(&sem);
+    }
     setup_timestamp = get_timestamp();
     int rb_fd = bpf_map__fd(skel->maps.ringbuffer);
     rb = ring_buffer__new(rb_fd, IOTracer::AddTrace, ctx, nullptr);
