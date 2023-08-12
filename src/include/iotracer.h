@@ -192,6 +192,12 @@ public:
         request = request_to_log_queue.results.front();
         request_to_log_queue.results.pop();
       }
+      auto &bio_info = request->io_statistics;
+      for(auto &bio : bio_info){
+        if(bio.isVirtIO){
+          fprintf(stdout,"virtio offset %lld nr_bytes %lld\n", bio.offset, bio.nr_bytes);
+        }
+      }
       done_request_handler->HandleDoneRequest(request, config);
     }
   }
@@ -200,6 +206,19 @@ public:
     long long offset = request->guest_offset_time;
 
     auto &bio_info = request->io_statistics;
+    auto bio_it = bio_info.begin();
+
+    unsigned long virtblk_offset = 0;
+    unsigned int virtblk_nr_bytes = 0;
+
+    while(bio_it != bio_info.end()) {
+      auto &bio = *bio_it;
+      if(!bio.isVirtIO){
+        bio_it++;
+        continue;
+      }
+
+    }
 
     for (int i = 0; i < request->events.size(); i++) {
     }
@@ -253,6 +272,7 @@ public:
     return 0;
   }
 
+
   void openBPF() {
     LIBBPF_OPTS(bpf_object_open_opts, open_opts);
     int err;
@@ -264,7 +284,7 @@ public:
       exit(1);
     }
 
-    if (RUN_AS_HOST) {
+    if (run_type ==  RUN_AS_HOST) {
       qemu_skel = qemu_uprobe_bpf::open(&open_opts);
       if (!qemu_skel) {
         fprintf(stderr, "Failed to open and load BPF skeleton\n");
@@ -308,23 +328,23 @@ public:
     config.getFilterConfig(&skel->bss->filter_config);
     int err = iotrace_bpf::load(skel);
     if (err) {
-      fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+      fprintf(stderr, "Failed to load and verify iotrace skeleton\n");
       exit(1);
     }
     err = iotrace_bpf::attach(skel);
     if (err) {
-      fprintf(stderr, "Failed to attach BPF skeleton\n");
+      fprintf(stderr, "Failed to attach iotrace skeleton\n");
       exit(1);
     }
-    if (RUN_AS_HOST) {
+    if (run_type == RUN_AS_HOST) {
       err = qemu_uprobe_bpf::load(qemu_skel);
       if (err) {
-        fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+        fprintf(stderr, "Failed to load and verify qemu skeleton\n");
         exit(1);
       }
       err = qemu_uprobe_bpf::attach(qemu_skel);
       if (err) {
-        fprintf(stderr, "Failed to attach BPF skeleton\n");
+        fprintf(stderr, "Failed to attach qemu skeleton\n");
         exit(1);
       }
     }
@@ -450,12 +470,7 @@ public:
 
   void HandleDoneRequest(std::shared_ptr<Request> req) {
     if (run_type == RUN_AS_HOST) {
-      // std::lock_guard<std::mutex> lock(native_request_queue.mutex);
-      // auto& ioinfo = req->io_statistics;
-      // for(int i = 0; i < ioinfo.size(); i++) {
-      //   fprintf(stdout,"isVirtIO %d offset %lld nr_bytes %lld\n", ioinfo[i].isVirtIO, ioinfo[i].offset, ioinfo[i].nr_bytes);
-      // }
-      // native_request_queue.results.push(req);
+
       std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
       auto& ioinfo = req->io_statistics;
       request_to_log_queue.results.push(req);

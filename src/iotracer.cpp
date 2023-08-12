@@ -114,7 +114,7 @@ void IOTracer::HandleSyscallEvent(struct event *e) {
       krq = std::make_shared<Request>();
       requests.insert(std::make_pair(tid, krq));
       krq->setSyscallInfo(e);
-    krq->start_time = e->timestamp;
+      krq->start_time = e->timestamp;
     }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
@@ -234,16 +234,16 @@ void IOTracer::HandleVirtioEvent(struct event *e) {
     }
     auto event = std::unique_ptr<Event>(new Event(e));
     krq->addEvent(std::move(event));
-    krq->io_statistics.back().isVirtIO = true;
+    if (krq->io_statistics.size() > 0)
+      krq->io_statistics.back().isVirtIO = true;
   }
 }
 void IOTracer::HandleQemuEvent(struct event *e) {
   if (config.qemu_enable == false) {
     return;
   }
-  debug(NULL,e,0);
   int tid = e->qemu_layer_info.tid;
-    // 由于一个 qemu 线程可以处理多个异步 io
+  // 由于一个 qemu 线程可以处理多个异步 io
   // 通过一个 tid 如何定位对应的 request ？
   // qemu_tid_requests[tid] 中列表的 back() 就是当前正在处理的 request
   switch (e->event_type) {
@@ -255,21 +255,21 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     qrq->addEvent(std::move(event));
     qrq->start_time = e->timestamp;
     auto task_vec_it = qemu_tid_requests.find(tid);
-    if(task_vec_it == qemu_tid_requests.end()){
+    if (task_vec_it == qemu_tid_requests.end()) {
       qemu_tid_requests.insert(std::make_pair(tid, qemuTaskVector()));
     }
     task_vec_it = qemu_tid_requests.find(tid);
-    auto& task_vec = task_vec_it->second;
-    task_vec.push_back(std::make_pair(e->qemu_layer_info.virt_rq_addr,qrq));
+    auto &task_vec = task_vec_it->second;
+    task_vec.push_back(std::make_pair(e->qemu_layer_info.virt_rq_addr, qrq));
     break;
   }
   case qemu__virtio_blk_req_complete: {
     auto it = qemu_tid_requests.find(tid);
     if (it != qemu_tid_requests.end()) {
-      auto& task_vec = it->second;
+      auto &task_vec = it->second;
       auto task_vec_it = task_vec.begin();
-      for(;task_vec_it != task_vec.end();task_vec_it++){
-        if(task_vec_it->first == e->qemu_layer_info.virt_rq_addr){
+      for (; task_vec_it != task_vec.end(); task_vec_it++) {
+        if (task_vec_it->first == e->qemu_layer_info.virt_rq_addr) {
           break;
         }
       }
@@ -284,7 +284,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__blk_aio_pwritev: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -292,7 +292,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__blk_aio_preadv: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -300,7 +300,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__blk_aio_flush: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -308,7 +308,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__qcow2_co_pwritev_part: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -316,15 +316,15 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__qcow2_co_preadv_part: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
-      qrq->setQemuInfo(e);
+    qrq->setQemuInfo(e);
     break;
   }
   case qemu__qcow2_co_flush_to_os: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -332,7 +332,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__raw_co_prw: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -340,7 +340,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
     break;
   }
   case qemu__raw_co_flush_to_disk: {
-    auto& task_vec = qemu_tid_requests[tid];
+    auto &task_vec = qemu_tid_requests[tid];
     auto qrq = task_vec.back().second;
     auto event = std::unique_ptr<Event>(new Event(e));
     qrq->addEvent(std::move(event));
@@ -350,7 +350,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   case qemu__handle_aiocb_rw: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
-      auto& task_vec = qemu_tid_requests[prev_id];
+      auto &task_vec = qemu_tid_requests[prev_id];
       auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
       qrq->addEvent(std::move(event));
@@ -372,7 +372,7 @@ void IOTracer::HandleQemuEvent(struct event *e) {
   case qemu__handle_aiocb_flush: {
     if (e->trigger_type == trigger_type::ENTRY) {
       int prev_id = e->qemu_layer_info.prev_tid;
-      auto& task_vec = qemu_tid_requests[prev_id];
+      auto &task_vec = qemu_tid_requests[prev_id];
       auto qrq = task_vec.back().second;
       auto event = std::unique_ptr<Event>(new Event(e));
       qrq->addEvent(std::move(event));
@@ -403,7 +403,7 @@ void IOTracer::AddEvent(void *data, size_t data_size) {
   if (e->timestamp < setup_timestamp) {
     return;
   }
-  // debug(NULL,data,data_size);
+  // debug(NULL, data, data_size);
   switch (e->info_type) {
   case syscall_layer: {
     HandleSyscallEvent(e);

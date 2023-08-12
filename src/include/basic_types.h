@@ -15,6 +15,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cassert>
 
 class Event {
 public:
@@ -118,6 +119,7 @@ public:
 
     // 将内存块返回给内存池
     void deallocate(void *ptr) noexcept {
+      // printf("deallocate\n");
       std::lock_guard<std::mutex> lock(mutex_);
       free_list_.push_front(ptr);
     }
