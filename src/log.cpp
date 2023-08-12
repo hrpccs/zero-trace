@@ -2,6 +2,7 @@
 #include "basic_types.h"
 #include "hook_point.h"
 #include "iotracer.h"
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -24,6 +25,7 @@ void FileLogHandler::HandleDoneRequest(std::shared_ptr<Request> req,
   fprintf(file, "rq%lld [%d:%d::%d] cost %.5lfms (tid pid) %d %d\n", req->id,
           req->start_tm.tm_hour, req->start_tm.tm_min, req->start_tm.tm_sec, ms,
           req->syscall_tid, req->syscall_pid);
+  fprintf(file,"ino %d dir ino %d dev 0x%x\n",req->syscall_inode,req->syscall_dir_inode,req->syscall_dev);
   std::string indent = "";
   for (int i = 0; i < req->events.size(); i++) {
     double ems = timestamp2ms(req->events[i]->timestamp - base_time);

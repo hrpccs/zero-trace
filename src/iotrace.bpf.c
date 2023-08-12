@@ -242,6 +242,8 @@ int BPF_KPROBE_SYSCALL(trace_read, int fd, void *buf, size_t count) {
   e->info_type = syscall_layer;
   e->trigger_type = ENTRY;
   e->timestamp = bpf_ktime_get_ns();
+  e->syscall_layer_info.tgid = tgid;
+  e->syscall_layer_info.tid = tid;
   e->syscall_layer_info.fd  = fd;
   e->syscall_layer_info.inode = inode;
   e->syscall_layer_info.dir_inode = dir_inode;
@@ -367,6 +369,10 @@ int BPF_KRETPROBE(write_ret,int ret) {
 SEC("ksyscall/readv")
 int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
   if (!syscall_enable) {
+    return 0;
+  }
+  if(qemu_enable){
+    bpf_debug("qemu untracked readv enter\n");
     return 0;
   }
 
@@ -2471,22 +2477,20 @@ int BPF_PROG(trace_rq_qos_done, struct rq_qos *q, struct request *rq)
 	return 0;
 }
 
-
-
-//rq_qos_issue
-SEC("fentry/__rq_qos_issue")
-int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
-{
+SEC("tp_btf/block_rq_issue")
+int handle_tp(struct bpf_raw_tracepoint_args *ctx)
+{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
   if(!block_enable){
     return 0;
   }
+	struct request *rq = (struct request *)(ctx->args[0]);
   long long rq_id;
   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
   if (request_ref == NULL) {
     return 0;
   }
   rq_id = *request_ref;
-	long nr_sector = rq->__data_len;
+	long nr_bytes = rq->__data_len;
 	sector_t sector = rq->__sector;
   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
   if(e == NULL){
@@ -2498,10 +2502,45 @@ int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
   e->timestamp = bpf_ktime_get_ns();
   e->block_layer_info.bio_id = 0;
   e->block_layer_info.rq_id = rq_id;
+  e->block_layer_info.sector = sector;
+  e->block_layer_info.nr_bytes = nr_bytes;
   bpf_ringbuf_submit(e, 0);
-	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_sector);
+	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_bytes);
 	return 0;
 }
+
+
+// //rq_qos_issue
+// SEC("fentry/__rq_qos_issue")
+// int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
+// {
+//   if(!block_enable){
+//     return 0;
+//   }
+//   long long rq_id;
+//   int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+//   if (request_ref == NULL) {
+//     return 0;
+//   }
+//   rq_id = *request_ref;
+// 	long nr_bytes = rq->__data_len;
+// 	sector_t sector = rq->__sector;
+//   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+//   if(e == NULL){
+//     return 0;
+//   }
+//   e->event_type = block__rq_issue;
+//   e->info_type = block_layer;
+//   e->trigger_type = NOT_PAIR;
+//   e->timestamp = bpf_ktime_get_ns();
+//   e->block_layer_info.bio_id = 0;
+//   e->block_layer_info.rq_id = rq_id;
+//   e->block_layer_info.sector = sector;
+//   e->block_layer_info.nr_bytes = nr_bytes;
+//   bpf_ringbuf_submit(e, 0);
+// 	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_bytes);
+// 	return 0;
+// }
 
 //rq_qos_requeue
 SEC("fentry/__rq_qos_requeue")
@@ -2788,8 +2827,6 @@ int BPF_PROG(virtio_queue_rq, struct blk_mq_hw_ctx *hctx, const struct blk_mq_qu
   e->trigger_type = NOT_PAIR;
   e->timestamp = bpf_ktime_get_ns();
   e->virtio_layer_info.rq_id = rq_id;
-  e->virtio_layer_info.sector = sector;
-  e->virtio_layer_info.nr_bytes = nr_bytes;
   e->virtio_layer_info.dev = dev;
   bpf_ringbuf_submit(e, 0);
 	return 0;

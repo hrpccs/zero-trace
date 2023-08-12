@@ -69,26 +69,22 @@ struct event {
       int tgid;
       unsigned long long approximate_filemap_start_offset;
       unsigned int approximate_filemap_len;
+      unsigned long sector;
+      unsigned int nr_bytes;
     } block_layer_info; // 对于 bio 的 split，queue，end 事件。
 
     struct {
       unsigned long long rq_id;
-      unsigned long sector;
-      unsigned int nr_bytes;
       unsigned int dev;
     } nvme_layer_info;
 
     struct {
       unsigned long long rq_id;
-      unsigned long sector;
-      unsigned int nr_bytes;
       unsigned int dev;
     } scsi_layer_info;
 
     struct {
       unsigned long long rq_id;
-      unsigned long long sector;
-      unsigned long long nr_bytes;
       unsigned int dev;
     } virtio_layer_info;
   };

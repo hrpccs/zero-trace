@@ -15,7 +15,7 @@
 
 
 
-int main()
+int runAsServer()
 {
     std::thread t1{HostThread::connect};
     std::thread t2{HostThread::hook};

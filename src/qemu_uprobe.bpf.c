@@ -180,7 +180,7 @@ int BPF_KPROBE(trace_qemu_blk_aio_pwritev, BlockBackend *blk, int64_t offset, QE
 	e->timestamp = bpf_ktime_get_ns();
 	e->qemu_layer_info.rq_type = RQ_TYPE_WRITE;
 	e->qemu_layer_info.tid = tid;
-	e->qemu_layer_info.offset = *offset_ref;
+	e->qemu_layer_info.offset = offset;
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -209,7 +209,7 @@ int BPF_KPROBE(trace_qemu_blk_qio_preadv, BlockBackend *blk, int64_t offset, QEM
 	e->timestamp = bpf_ktime_get_ns();
 	e->qemu_layer_info.rq_type = RQ_TYPE_READ;
 	e->qemu_layer_info.tid = tid;
-	e->qemu_layer_info.offset = *offset_ref;
+	e->qemu_layer_info.offset = offset;
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -250,20 +250,20 @@ int BPF_KPROBE(trace_qcow2_co_pwritev_task_entry)
 {
 	// get from ctx
 	int tid = bpf_get_current_pid_tgid() & 0xffffffff;
-	long long* host_offset_ref = bpf_map_lookup_elem(&tid_offset_map,&tid);
-	if(host_offset_ref == NULL){
+	long long* guest_offset_ref = bpf_map_lookup_elem(&tid_offset_map,&tid);
+	if(guest_offset_ref == NULL){
 		return 0;
 	}
-	if(*host_offset_ref == -RQ_TYPE_FLUSH){
+	if(*guest_offset_ref == -RQ_TYPE_FLUSH){
 		return 0;
 	}
-	long long host_offset = PT_REGS_PARM6(ctx);
-	if(*host_offset_ref != host_offset){
+	long long guest_offset = PT_REGS_PARM6(ctx);
+	if(*guest_offset_ref != guest_offset){
 		return 0;
 	}
 	long long file_cluster_offset = PT_REGS_PARM5(ctx);
-	long long guest_offset = file_cluster_offset + (host_offset & QCOW2_CLUSTER_SIZE);
-	*host_offset_ref = guest_offset;
+	long long host_offset = file_cluster_offset + (guest_offset & QCOW2_CLUSTER_SIZE);
+	*guest_offset_ref = host_offset;
 	bpf_printk("qcow2_add_task file_cluster_offset %llx host_offset %llx guest_offset %llx\n",file_cluster_offset,host_offset,guest_offset);
 	return 0;
 }
@@ -277,7 +277,7 @@ int BPF_KPROBE(trace_qcow2_co_pwritev_part,BlockDriverState *bs, uint64_t offset
 	if(offset_ref == NULL){
 		return 0;
 	}
-	if(*offset_ref != -offset){
+	if(*offset_ref != offset){
 		return 0;
 	}
 	struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -307,7 +307,7 @@ int BPF_KPROBE(trace_qcow2_co_preadv_part,BlockDriverState *bs, uint64_t offset,
 	if(offset_ref == NULL){
 		return 0;
 	}
-	if(*offset_ref != -offset){
+	if(*offset_ref != offset){
 		return 0;
 	}
 	struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
@@ -493,7 +493,7 @@ int BPF_KRETPROBE(trace_handle_aiocb_rw_ret)
 	// }
 	// opaque = *arg;
 	// bpf_map_delete_elem(&aio_task_tid_arg_map,&tid);
-	bpf_map_delete_elem(&args_tid_map,&opaque);
+	// bpf_map_delete_elem(&args_tid_map,&opaque);
 	e->event_type = qemu__handle_aiocb_rw;
 	e->info_type = qemu_layer;
 	e->trigger_type =EXIT;
@@ -559,7 +559,7 @@ int BPF_KRETPROBE(trace_handle_aiocb_flush_ret)
 	// opaque = *arg;
 	// bpf_map_delete_elem(&aio_task_tid_arg_map,&tid);
 	bpf_map_delete_elem(&tid_offset_map,&tid);	
-	bpf_map_delete_elem(&args_tid_map,&opaque);
+	// bpf_map_delete_elem(&args_tid_map,&opaque);
 	e->event_type = qemu__handle_aiocb_flush;
 	e->info_type = qemu_layer;
 	e->trigger_type =EXIT;
