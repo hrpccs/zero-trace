@@ -12,7 +12,11 @@ set(CMAKE_CXX_STANDARD 17)
 
 # Set the compiler for C++ files to clang++
 set(CMAKE_CXX_COMPILER "clang++")
-add_compile_options(-g -O2)
+add_compile_options(-g -O2 -static)
+
+
+# static link
+set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ -static -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
 
 # Add all C++ files in the src directory to the project
 file(GLOB_RECURSE CPP_SOURCES "*.cpp")

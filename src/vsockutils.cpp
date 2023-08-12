@@ -21,7 +21,7 @@ struct sockaddr_vm VSockEngine::getBeastAncestorAddr()
     memset(&myaddr, 0, sizeof(myaddr));
     myaddr.svm_family = AF_VSOCK;
     myaddr.svm_cid = VMADDR_CID_HOST;
-    myaddr.svm_port = htons(11451); //henghengheng,aaaaaaaaaaaaaaa
+    myaddr.svm_port = htons(11451); 
     return myaddr;
 }
 

@@ -108,7 +108,6 @@ namespace HostThread
     }
 };
 
-
 namespace GuestThread
 {
     std::queue<messageexp> to_remote;
