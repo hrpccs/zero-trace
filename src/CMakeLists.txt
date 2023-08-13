@@ -24,7 +24,7 @@ file(GLOB_RECURSE CPP_SOURCES "*.cpp")
 # Add the C and C++ sources to the project
 add_executable(iotracer  ${CPP_SOURCES})
 # include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include /usr/include)
-set(QEMU_PATH /home/hrpccs/workspace/qemu-proj/qemu)
+set(QEMU_PATH ${CMAKE_SOURCE_DIR}/../qemu)
 include_directories( ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include)
 
 add_dependencies(iotracer iotrace_skel)
@@ -95,7 +95,7 @@ include(ExternalProject)
 set(CEREAL_ROOT     ${CMAKE_BINARY_DIR}/src/cereal)
 set(CEREAL_INCLUDE_DIR  ${CEREAL_ROOT}/include)
 
-set(CEREAL_INSTALL mv ${CEREAL_ROOT}/include/cereal ${CMAKE_SOURCE_DIR}/include)
+set(CEREAL_INSTALL cp -r ${CEREAL_ROOT}/include/cereal ${CMAKE_SOURCE_DIR}/include)
 ExternalProject_Add(cereal
     GIT_REPOSITORY https://github.com/USCiLab/cereal.git
     PREFIX                  ${CMAKE_BINARY_DIR}

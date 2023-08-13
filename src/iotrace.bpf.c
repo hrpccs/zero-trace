@@ -13,7 +13,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
-// #define DEBUG 1
+#define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -126,6 +126,14 @@ static int inline get_and_filter_pid(pid_t *tgid, pid_t *tid) {
   return pid_filter(*tgid, *tid);
 }
 
+static int inline get_and_filter_cgid(long long *cgid) {
+  *cgid = bpf_get_current_cgroup_id();
+  if(filter_config.cgroup_id != -1 && filter_config.cgroup_id != *cgid){
+    return 1;
+  }
+  return 0;
+}
+
 static int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
                                 ino_t *inode, dev_t *devp, ino_t *dir_inodep) {
   if (filter_config.inode != 0) {
@@ -220,6 +228,10 @@ int BPF_KPROBE_SYSCALL(trace_read, int fd, void *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){ // check offset
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL ){
@@ -300,6 +312,10 @@ int BPF_KSYSCALL(write, int fd, void *buf, size_t count) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){ // check offset
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL ){
@@ -373,6 +389,10 @@ int BPF_KPROBE_SYSCALL(readv, int fd, struct iovec *vec, unsigned long vlen) {
 
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
     return 0;
   }
   if(qemu_enable){
@@ -451,6 +471,10 @@ int BPF_KPROBE_SYSCALL(writev, int fd, struct iovec *vec, unsigned long vlen) {
 
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
+    return 0;
+  }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
     return 0;
   }
   if(qemu_enable){
@@ -532,6 +556,10 @@ int BPF_KPROBE_SYSCALL(pread64, int fd, void *buf, size_t count,
     return 0;
   }
 
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){ // check offset
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL){
@@ -605,6 +633,10 @@ int BPF_KPROBE_SYSCALL(pwrite64, int fd, void *buf, size_t count,
     return 0;
   }
 
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   pid_t tgid, tid;
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
@@ -687,6 +719,10 @@ int BPF_KPROBE_SYSCALL(preadv, int fd, struct iovec *vec, unsigned long vlen, lo
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL ){
@@ -767,6 +803,10 @@ int BPF_KPROBE_SYSCALL(pwritev, int fd, struct iovec *vec, unsigned long vlen,
     return 0;
   }
 
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL ){
@@ -848,6 +888,10 @@ int BPF_KPROBE_SYSCALL(fsync, int fd) {
     return 0;
   }
 
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
     if(offset_ref == NULL || *offset_ref != -RQ_TYPE_FLUSH ){
@@ -927,6 +971,10 @@ int BPF_KPROBE_SYSCALL(fdatasync, int fd) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
 
   if(qemu_enable){
     long long *offset_ref = bpf_map_lookup_elem(&tid_offset_map, &tid);
@@ -1003,6 +1051,10 @@ int BPF_KPROBE_SYSCALL(sync_file_range, int fd, loff_t offset, loff_t nbytes,
   if (!syscall_enable) {
     return 0;
   }
+  long long cgid;
+  if(get_and_filter_cgid(&cgid)){
+    return 0;
+  }
 
   if(qemu_enable){
     bpf_debug("qemu untracked sync_file_range enter\n");
@@ -1072,18 +1124,6 @@ int BPF_KRETPROBE(sync_file_range_ret) {
 }
 
 /* vfs layer */
-static int inline vfs_filter_inode(ino_t inode) {
-  if (filter_config.inode != 0 && filter_config.inode != inode) {
-    return 1;
-  }
-  // check inode_ref_map
-  int *inode_ref = bpf_map_lookup_elem(&inode_ref_map, &inode);
-  if (inode_ref == NULL) {
-    return 1;
-  }
-
-  return 0;
-}
 
 struct rw_area {
   ino_t inode;
@@ -2114,15 +2154,33 @@ int BPF_PROG(trace_mark_page_accessed, struct page *page) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("mark page access enter without enter\n");
+    return 0;
+  }
   // check page_ref_map
   // if exsits, then increase ref cnt
   int *ref = bpf_map_lookup_elem(&page_ref_map, &page);
   if (ref == NULL) {
-    return 0;
   } else {
     (*ref)++;
     bpf_debug("mark_page_accessed page_ref_map: %d\n", *ref);
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+
+  e->event_type = pagecache__mark_page_accessed;
+  e->info_type = fs_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
+
   return 0;
 }
 
@@ -2135,17 +2193,33 @@ int handle_tp_filemap_3(struct bpf_raw_tracepoint_args *ctx) {
   if (get_and_filter_pid(&tgid, &tid)) {
     return 0;
   }
+  int* tid_syscall_enter = bpf_map_lookup_elem(&tid_syscall_enter_map, &tid);
+  if(tid_syscall_enter == NULL){
+    bpf_debug("writeback dirty page enter without enter\n");
+    return 0;
+  }
   struct page *page = (struct page *)(ctx->args[0]);
   // check page_ref_map
   // if exsits, record the ref cnt
   int *ref = bpf_map_lookup_elem(&page_ref_map, &page);
   if (ref == NULL) {
-    return 0;
   } else {
     __sync_fetch_and_add(&page_ref_map_cnt, *ref);
     __sync_fetch_and_add(&page_dirty_cnt, 1);
     bpf_debug("writeback_dirty_page page_ref_map: %d\n", *ref);
   }
+
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = pagecache__writeback_dirty_page;
+  e->info_type = fs_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->fs_layer_info.tgid = tgid;
+  e->fs_layer_info.tid = tid;
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -2504,8 +2578,40 @@ int handle_tp(struct bpf_raw_tracepoint_args *ctx)
   e->block_layer_info.sector = sector;
   e->block_layer_info.nr_bytes = nr_bytes;
   bpf_ringbuf_submit(e, 0);
-	bpf_printk(" rq_insert target rq: %lx start: %lx len: %lx\n", rq, sector, nr_bytes);
+	bpf_printk(" rq_issue target rq: %lx start: %lx len: %lx\n", rq, sector, nr_bytes);
 	return 0;
+}
+
+SEC("tp_btf/block_rq_insert")
+int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
+{ // ctx->args[0] 是 ptgreg 的指向原触发 tracepoint 的函数的参数， ctx->args[1] 是 tracepoint 定义 trace 函数的第一个参数
+  if(!block_enable){
+    return 0;
+  }
+  struct request *rq = (struct request *)(ctx->args[0]);
+  long long rq_id;
+  int *request_ref = bpf_map_lookup_elem(&request_ref_map, &rq);
+  if (request_ref == NULL) {
+    return 0;
+  }
+  rq_id = *request_ref;
+  long nr_bytes = rq->__data_len;
+  sector_t sector = rq->__sector;
+  struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
+  if(e == NULL){
+    return 0;
+  }
+  e->event_type = block__rq_insert;
+  e->info_type = block_layer;
+  e->trigger_type = NOT_PAIR;
+  e->timestamp = bpf_ktime_get_ns();
+  e->block_layer_info.bio_id = 0;
+  e->block_layer_info.rq_id = rq_id;
+  e->block_layer_info.sector = sector;
+  e->block_layer_info.nr_bytes = nr_bytes;
+  bpf_ringbuf_submit(e, 0);
+  bpf_printk(" rq_insert target rq: %lx", rq);
+  return 0;
 }
 
 

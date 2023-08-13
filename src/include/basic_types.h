@@ -164,12 +164,7 @@ class Request {
   // asyncronous objects a request is identified by the first event a request is
   // ended by the last event
 public:
-  Request() {
-    id = this->request_id++;
-    auto now = std::chrono::system_clock::now();
-    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    // start_tm = *std::localtime(&now_time);
-  }
+  Request() { id = this->request_id++; }
   virtual ~Request() {}
   virtual void addEvent(std::unique_ptr<Event> event) {
     events.push_back(std::move(event));
@@ -225,16 +220,67 @@ public:
 
     // virtblk_nr_bytes = e->qemu_layer_info.nr_bytes;
   }
+  void analyseRequest() {
+    auto req = this;
+    
+    long long offcpu_time = 0, switchout_start;
+    long long avg_time_getpage = 0, getpage_start = 0, getpage_count = 0;
+    long long q2c_time = 0;
+    long long q2d_time = 0;
+    long long d2c_time = 0;
+
+    for (int i = 0; i < req->events.size(); i++) {
+      if (req->events[i]->event_type ==
+          kernel_hook_type::fs__filemap_get_pages) {
+        if (req->events[i]->trigger_type == trigger_type::EXIT) {
+          avg_time_getpage += req->events[i]->timestamp - getpage_start;
+        } else if (req->events[i]->trigger_type == trigger_type::ENTRY) {
+          getpage_start = req->events[i]->timestamp;
+        }
+      } else if (req->events[i]->event_type ==
+                 kernel_hook_type::pagecache__mark_page_accessed) {
+        getpage_count++;
+      } else if (req->events[i]->event_type ==
+                 kernel_hook_type::sched__switch) {
+        if (req->events[i]->trigger_type == trigger_type::ENTRY) {
+          switchout_start = req->events[i]->timestamp;
+        } else if (req->events[i]->trigger_type == trigger_type::EXIT) {
+          offcpu_time += req->events[i]->timestamp - switchout_start;
+        }
+      }
+    }
+
+    for (int i = 0; i < req->io_statistics.size(); i++) {
+      long long time1 = req->io_statistics[i].bio_done_time -
+                        req->io_statistics[i].bio_queue_time;
+      q2c_time += time1;
+      if (req->io_statistics[i].bio_schedule_end_time != 0) {
+        q2d_time += req->io_statistics[i].bio_schedule_end_time -
+                    req->io_statistics[i].bio_queue_time;
+        d2c_time += req->io_statistics[i].bio_done_time -
+                    req->io_statistics[i].bio_schedule_end_time;
+      }
+      req->bio_cnt += 1;
+    }
+
+    req->avg_d2c += d2c_time;
+    req->avg_q2c += q2c_time;
+    req->avg_q2d += q2d_time;
+    req->avg_readpage += avg_time_getpage;
+    req->avg_offcpu += offcpu_time;
+    req->avg_time += req->end_time - req->start_time;
+    req->done_count += 1;
+    return;
+  }
 
   // for statistics
   struct IOStatistic {
     IOStatistic() {}
     bool bio_is_throttled = false;
     bool bio_is_bounce = false;
-    unsigned long long bio_queue_time = 0;          // bio_queue
-    unsigned long long bio_schedule_start_time = 0; // rq_insert
-    unsigned long long bio_schedule_end_time = 0;   // rq_issue
-    unsigned long long bio_done_time = 0;           // bio_done
+    unsigned long long bio_queue_time = 0;        // bio_queue
+    unsigned long long bio_schedule_end_time = 0; // rq_issue
+    unsigned long long bio_done_time = 0;         // bio_done
     unsigned long long offset = 0;
     unsigned int nr_bytes = 0;
     bool isVirtIO = false;
@@ -242,16 +288,20 @@ public:
     int done_idx_in_request = -1;
     template <class Archive> void serialize(Archive &archive) {
       archive(bio_is_throttled, bio_is_bounce, bio_queue_time,
-              bio_schedule_start_time, bio_schedule_end_time, bio_done_time,
-              offset, nr_bytes, isVirtIO, issue_idx_in_request,
-              done_idx_in_request);
+              bio_schedule_end_time, bio_done_time, offset, nr_bytes, isVirtIO,
+              issue_idx_in_request, done_idx_in_request);
     }
   };
 
   static unsigned long long request_id;
-  static double estimated_q2c;
-  static double estimated_q2d;
-  static double estimated_d2c;
+  static unsigned long long avg_q2c;
+  static unsigned long long avg_q2d;
+  static unsigned long long avg_d2c;
+  static unsigned long long avg_offcpu;
+  static unsigned long long avg_readpage;
+  static unsigned long long avg_time;
+  static unsigned long long done_count;
+  static unsigned long long bio_cnt;
   unsigned long long id;
   std::vector<std::unique_ptr<Event>> events;
   int syscall_tid;
@@ -259,7 +309,7 @@ public:
   int syscall_fd;
   unsigned long syscall_dev;
   unsigned long syscall_inode;
-  unsigned long  syscall_dir_inode;
+  unsigned long syscall_dir_inode;
   enum rq_type syscall_rq_type;
   int syscall_ret;
   unsigned long syscall_offset; // use in top level syscall
