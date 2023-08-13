@@ -28,9 +28,9 @@ struct TraceConfig {
     block_enable = 1;
     scsi_enable = 1;
     nvme_enable = 1;
-    filemap_enable = 0;
+    filemap_enable = 1;
     iomap_enable = 1;
-    sched_enable = 0;
+    sched_enable = 1;
     virtio_enable = 1;
     task_name = "";
     pid = 0;
@@ -39,7 +39,7 @@ struct TraceConfig {
     directory_path = "";
     device_path = "";
     cgroup_path = "";
-    time_threshold = 10;
+    time_threshold = 1;
     timer_trigger_duration = 0;
 
     asHost = false;
@@ -81,7 +81,7 @@ struct TraceConfig {
       config->filter_by_command = 1;
     }
 
-    config->cgroup_id = 0;
+    config->cgroup_id = -1;
     config->dev = 0;
     config->directory_inode = 0;
     config->inode = 0;
@@ -121,7 +121,7 @@ struct TraceConfig {
   bool block_enable = 1;
   bool scsi_enable = 1;
   bool nvme_enable = 1;
-  bool filemap_enable = 0;
+  bool filemap_enable = 1;
   bool iomap_enable = 1;
   bool sched_enable = 1;
   bool virtio_enable = 0;
@@ -325,19 +325,6 @@ public:
           continue;
         }
 
-        // printf("virtio request: offset: %lu, nr_bytes: %u, issue_idx: %d, "
-        //        "done_idx: %d\n",
-        //        virtblk_offset, virtblk_nr_bytes, issue_idx, done_idx);
-        // printf(
-        //     "host qemu request: offset: %lu, nr_bytes: %u, start_time: %llu, "
-        //     "end_time: %llu\n",
-        //     host_qemu_request->virtblk_guest_offset,
-        //     host_qemu_request->virtblk_nr_bytes, start_time, end_time);
-        // for (int i = 0; i < host_qemu_request->events.size(); i++) {
-        //   printf("host qemu request event: %s, timestamp: %llu\n",
-        //          kernel_hook_type_str[host_qemu_request->events[i]->event_type],
-        //          host_qemu_request->events[i]->timestamp);
-        // }
         // check if host_qemu_request fit into the hole
         while (merged_idx <= issue_idx) {
           guest_request->events[merged_idx]->timestamp -=
@@ -471,6 +458,7 @@ public:
     if (config.asGuest) {
       run_type = RUN_AS_GUEST;
       config.virtio_enable = 1;
+      config.sched_enable = 0;
     }
     if (config.asHost) {
       run_type = RUN_AS_HOST;
@@ -572,6 +560,9 @@ public:
       // 直接把请求输出到 log
       unsigned long long total_time = req->end_time - req->start_time;
       double ms = total_time / 1000000.0;
+      
+      req->analyseRequest();
+
       if (ms > config.time_threshold) {
         std::lock_guard<std::mutex> lock(request_to_log_queue.mutex);
         request_to_log_queue.results.push(req);

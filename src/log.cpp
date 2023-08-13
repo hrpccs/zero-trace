@@ -14,13 +14,19 @@ void FileLogHandler::HandleDoneRequest(std::shared_ptr<Request> req,
                                        TraceConfig &config) {
   unsigned long long total_time = req->end_time - req->start_time;
   double ms = timestamp2ms(total_time);
-  estimated_avg_time = 0.9 * estimated_avg_time + 0.1 * ms;
   unsigned long long base_time = req->start_time;
   // time
-  fprintf(file, "rq%lld  cost %.5lfms (tid pid) %d %d\n", req->id, ms,
-          req->syscall_tid, req->syscall_pid);
-  fprintf(file, "ino %ld dir ino %ld dev 0x%lx\n", req->syscall_inode,
+  fprintf(file, "rq%lld  cost %.5lfms (tid pid) %d %d\t""ino %ld dir ino %ld dev 0x%lx\n", req->id, ms,
+          req->syscall_tid, req->syscall_pid, req->syscall_inode,
           req->syscall_dir_inode, req->syscall_dev);
+  fprintf(file,"avg : time - %.5lfms q2c - %.5lfms q2d - %.5lfms d2c - %.5lfms\n", ms,
+          timestamp2ms(req->avg_q2c) / req->bio_cnt,
+          timestamp2ms(req->avg_q2d) / req->bio_cnt,
+          timestamp2ms(req->avg_d2c) / req->bio_cnt);
+  fprintf(file, "avg : avg_readpage - %.5lfms avg_offcpu - %.5lfms avg_offcpu_ratio - %.5lf\n",
+          timestamp2ms(req->avg_readpage) / req->done_count,
+          timestamp2ms(req->avg_offcpu) / req->done_count,
+         (double)req->avg_offcpu / req->avg_time);
   std::string indent = "";
   for (int i = 0; i < req->events.size(); i++) {
     double ems = timestamp2ms(req->events[i]->timestamp - base_time);

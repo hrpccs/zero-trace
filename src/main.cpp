@@ -29,6 +29,15 @@
 #include <utility>
 
 unsigned long long Request::request_id = 0;
+unsigned long long Request::done_count = 0;
+unsigned long long Request::avg_d2c = 0;
+unsigned long long Request::avg_q2c = 0;
+unsigned long long Request::avg_q2d = 0;
+unsigned long long Request::avg_readpage = 0;
+unsigned long long Request::avg_offcpu = 0;
+unsigned long long Request::avg_time = 0;
+unsigned long long Request::bio_cnt=0;
+
 Event::MemoryPool Event::memory_pool_;
 IOTracer *tracer = nullptr;
 

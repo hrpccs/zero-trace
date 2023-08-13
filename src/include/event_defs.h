@@ -99,5 +99,5 @@ struct filter_config {
   short filter_by_command;
   char command[MAX_COMM_LEN];
   unsigned int command_len;
-  unsigned long long cgroup_id;
+  long long cgroup_id;
 };

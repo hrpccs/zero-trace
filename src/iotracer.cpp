@@ -77,7 +77,6 @@ void IOTracer::HandleBlockEvent(struct event *e) {
       auto krq = it->second;
       auto event = std::unique_ptr<Event>(new Event(e));
       krq->addEvent(std::move(event));
-      krq->io_statistics.back().bio_schedule_start_time = e->timestamp;
     }
   } else if (e->event_type == kernel_hook_type::block__rq_issue) {
     int rq_id = e->block_layer_info.rq_id;
@@ -154,7 +153,8 @@ void IOTracer::HandleFsEvent(struct event *e) {
     if (krq == nullptr) {
       return;
     }
-    if (e->trigger_type != trigger_type::EXIT) {
+    if (e->trigger_type != trigger_type::EXIT && e->event_type != pagecache__mark_page_accessed &&
+        e->event_type != pagecache__writeback_dirty_page) {
       unsigned long offset = e->fs_layer_info.offset;
       unsigned long bytes = e->fs_layer_info.bytes;
       if (run_type == IOTracer::RUN_AS_HOST) {
