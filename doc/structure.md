@@ -1,60 +1,59 @@
 # 项目结构文档
 
 ## 一.项目总体结构
-* [CMakeLists.txt]()
-* [doc(dir)]()
-    * [development_report.md]()
-    * [env&vsock.md]()
-    * [hookpoint.md]()
-    * [structure.md]()
-* [envtest(dir)]()
-    * [build.sh]()
-    * [client.cpp]()
-    * [mesgtype.cpp]()
-    * [mesgtype.h]()
-    * [mythread.cpp]()
-    * [mythreads.h]()
-    * [README.md]()
-    * [server.cpp]()
-    * [testcase.h]()
-    * [timesync.cpp]()
-    * [timesync.h]()
-    * [vsockutils.cpp]()
-    * [vsockutils.h]()
-* [gallery(dir)]()
-* [LICENSE]()
-* [README.md]()
-* [runbenchmark(dir)]()
-    * [benchmark(dir)]()
-        * [example.txt]()
-        * [install_sysbench_ubuntu.sh]()
-    * [launch_benchmark.py]()
-* [src(dir)]()
-    * [CMakeLists.txt]()
-    * [include(dir)]()
-        * [basic_types.h]()
-        * [event_defs.h]()
-        * [hook_point.h]()
-        * [iotracer.h]()
-        * [log.h]()
-        * [mesgtype.h]()
-        * [system_macro.h]()
-        * [timesync.h]()
-        * [utils.h]()
-        * [vmlinux.h]()
-        * [vsockutils.h]()
-    * [iotrace.bpf.c]()
-    * [iotracer.cpp]()
-    * [log.cpp]()
-    * [main.cpp]()
-    * [mesgtype.cpp]()
-    * [qemu_uprobe.bpf.c]()
-    * [timesync.cpp]()
-    * [utils.cpp]()
-    * [vsockutils.cpp]()
+* [CMakeLists.txt](#cmakeliststxt)
+* [doc(dir)](#docdir)
+    * [development_report.md](#development_reportmd)
+    * [env&vsock.md](#envvsockmd)
+    * [hookpoint.md](#hookpointmd)
+    * [structure.md](#structuremd)
+* [envtest(dir)](#envtestdir)
+    * [build.sh](#buildsh)
+    * [client.cpp](#clientcpp)
+    * [mesgtype.cpp](#mesgtypecpp)
+    * [mesgtype.h](#mesgtypeh)
+    * [mythread.cpp](#mythreadcppmythreadsh)
+    * [mythreads.h](#mythreadcppmythreadsh)
+    * [README.md](#readmemd)
+    * [server.cpp](#servercpp)
+    * [testcase.h](#testcaseh)
+    * [timesync.cpp](#timesynccpptimesynch)
+    * [timesync.h](#timesynccpptimesynch)
+    * [vsockutils.cpp](#vsockutilscppvsockutilsh)
+    * [vsockutils.h](#vsockutilscppvsockutilsh)
+* [gallery(dir)](#gallerydir)
+* [LICENSE](#license)
+* [README.md](#readmemd-1)
+* [runbenchmark(dir)](#runbenchmarkdir)
+    * [benchmark(dir)](#benchmarkdir)
+        * [example.txt](#exampletxt)
+        * [install_sysbench_ubuntu.sh](#install_sysbench_ubuntush)
+    * [launch_benchmark.py](#launch_benchmarkpy)
+* [src(dir)](#srcdir)
+    * [CMakeLists.txt](#cmakeliststxt-1)
+    * [include(dir)](#includedir)
+        * [basic_types.h](#basic_typesh)
+        * [event_defs.h](#event_defsh)
+        * [hook_point.h](#hook_pointh)
+        * [iotracer.h](#iotracerh)
+        * [log.h](#logh)
+        * [mesgtype.h](#mesgtypeh-1)
+        * [system_macro.h](#system_macroh)
+        * [timesync.h](#timesynch)
+        * [utils.h](#utilsh)
+        * [vmlinux.h](#vmlinuxh)
+        * [vsockutils.h](#vsockutilsh)
+    * [iotrace.bpf.c](#iotracebpfc)
+    * [iotracer.cpp](#iotracercpp)
+    * [log.cpp](#logcpp)
+    * [main.cpp](#maincpp)
+    * [mesgtype.cpp](#mesgtypecpp-1)
+    * [qemu_uprobe.bpf.c](#qemu_uprobebpfc)
+    * [timesync.cpp](#timesynccpp)
+    * [utils.cpp](#utilscpp)
+    * [vsockutils.cpp](#vsockutilscpp)
 
 ## 二.文件,目录功能描述
-
 ### [CMakeLists.txt](../CMakeLists.txt)
 顶层的CMakeList文件,用来帮助编译的
 ### [doc(dir)](.)
@@ -79,9 +78,9 @@
 #### [client.cpp](../envtest/client.cpp)
 测试程序的client(guest)端主函数所在文件,负责启动客户端的模拟tracing线程和vsock传输线程.
 #### [mesgtype.cpp](../envtest/mesgtype.cpp)
-为各种需要传输的类生成序列化/反序列化helper函数.
+为测试框架各种需要传输的类生成序列化/反序列化helper函数.
 #### [mesgtype.h](../envtest/mesgtype.h)
-本文件用来注册各种需要传输的类,并为它们生成函数原型,初始化helper,生成类型标识等
+本文件用来为测试框架注册各种需要传输的类,并为它们生成函数原型,初始化helper,生成类型标识等
 #### [mythread.cpp](../envtest/mythread.cpp),[mythreads.h](../envtest/mythread.h)
 定义并实现三个host端线程所需的函数和两个guest端线程所需的函数
 #### [README.md](../envtest/README.md)
@@ -113,25 +112,48 @@
 ### [src(dir)](../src/)
 本项目的关键部分,里面包含了最重要的Tracing框架的源代码
 #### [CMakeLists.txt](../src/CMakeLists.txt)
-内层CMake文件
-#### [include(dir)]()
-##### [basic_types.h]()
-##### [event_defs.h]()
-##### [hook_point.h]()
-##### [iotracer.h]()
-##### [log.h]()
-##### [mesgtype.h]()
-##### [system_macro.h]()
-##### [timesync.h]()
-##### [utils.h]()
-##### [vmlinux.h]()
-##### [vsockutils.h]()
-#### [iotrace.bpf.c]()
-#### [iotracer.cpp]()
-#### [log.cpp]()
-#### [main.cpp]()
+内层CMake文件,可以帮助生成Makefile
+#### [include(dir)](../src/include/)
+各种头文件都在这里
+##### [basic_types.h](../src/include/basic_types.h)
+Tracing所需要的一些基本的数据结构,包括了处理后的事件,内存池和请求.
+##### [event_defs.h](../src/include/event_defs.h)
+定义了eBPF直接抓到的事件结构和过滤参数
+##### [hook_point.h](../src/include/hook_point.h)
+定义了各个挂载点和I/O请求各个层次的类型
+##### [iotracer.h](../src/include/iotracer.h)
+
+##### [log.h](../src/include/log.h)
+将日志写到文件里的模块的头文件
+##### [mesgtype.h](../src/mesgtype.cpp)
+本文件用来为Tracing框架注册各种需要传输的类,并为它们生成函数原型,初始化helper,生成类型标识等.
+* 与测试文件中[同名文件](../envtest/mesgtype.h)功能类似
+##### [system_macro.h](../src/include/system_macro.h)
+一些与系统指令有关的宏定义
+##### [timesync.h](../src/include/timesync.h)
+[同上](#timesynccpptimesynch)
+##### [utils.h](../src/include/utils.h)
+一些获取设备号,文件inode号,时间戳等信息的辅助函数的原型
+##### [vmlinux.h](../src/include/vmlinux.h)
+自动生成的一个头文件,内核中的`bpftool`工具其中功能之一就是读取`vmlinux`文件并生成对应的`vmlinux.h`头文件。`vmlinux.h`会包含运行内核中所使用的每一个类型定义，因此该文件的比较大。
+##### [vsockutils.h](../src/include/vsockutils.h)
+[同上](#vsockutilscppvsockutilsh)
+#### [iotrace.bpf.c](../src/iotrace.bpf.c)
+与tracing相关的各个挂载点,除了QEMU之外
+#### [iotracer.cpp](../src/iotracer.cpp)
+
+#### [log.cpp](../src/log.cpp)
+将日志写到文件里的模块
+#### [main.cpp](../src/main.cpp)
+整个程序的入口.解析命令行参数,启动对应的线程
 #### [mesgtype.cpp]()
-#### [qemu_uprobe.bpf.c]()
-#### [timesync.cpp]()
-#### [utils.cpp]()
-#### [vsockutils.cpp]()
+为Tracing框架各种需要传输的类生成序列化/反序列化helper函数.
+* 与测试文件中[同名文件](../envtest/mesgtype.cpp)功能类似
+#### [qemu_uprobe.bpf.c](../src/qemu_uprobe.bpf.c)
+与tracing中QEMU相关的各个挂载点
+#### [timesync.cpp](../src/timesync.cpp)
+[同上](#timesynccpptimesynch)
+#### [utils.cpp](../src/utils.cpp)
+一些获取设备号,文件inode号,时间戳等信息的辅助函数的实现
+#### [vsockutils.cpp](../src/vsockutils.cpp)
+[同上](#vsockutilscppvsockutilsh)
