@@ -46,7 +46,7 @@ Note: we develop ebpf user space program in C++ and we use bpftool to generate s
 ### Build and Run our demo
 
 ```bash
-$ cmake -S . -B build
+$ cmake -S . -B build -DWITH_GRAFANA=ON/OFF
 $ cd build 
 $ make 
 $ sudo ./iotracer  -w 1.0 -o log -T 2 -n  "task name to trace" e.g. you can use sysbench located at runbenchmark dir.
