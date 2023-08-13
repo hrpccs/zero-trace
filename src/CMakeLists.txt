@@ -15,12 +15,16 @@ set(CMAKE_CXX_COMPILER "clang++")
 add_compile_options(-g -O2 -static)
 
 # add protobuf
-find_package(Protobuf REQUIRED)
+if(WITH_GRAFANA)
+    find_package(Protobuf REQUIRED)
 
-set(PROTO_FILES ${CMAKE_SOURCE_DIR}/grafana/src/message.proto)
-protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+    set(PROTO_FILES ${CMAKE_SOURCE_DIR}/grafana/src/message.proto)
+    protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
 
-include_directories(${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/grafana/src)
+    include_directories(${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/grafana/src)
+else()
+    include_directories(${CMAKE_BINARY_DIR})
+endif()
 
 # static link
 set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ -static -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
@@ -29,11 +33,20 @@ set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ -static -Wl,--whole
 file(GLOB_RECURSE CPP_SOURCES "*.cpp")
 
 # Add the C and C++ sources to the project
-add_executable(iotracer ${CPP_SOURCES} ${PROTO_SRCS})
+if(WITH_GRAFANA)
+    add_executable(iotracer ${CPP_SOURCES} ${PROTO_SRCS})
+else()
+    add_executable(iotracer ${CPP_SOURCES})
+endif()
 
 # include_directories( ${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include /usr/include)
 set(QEMU_PATH ${CMAKE_SOURCE_DIR}/src/../qemu)
-include_directories(${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include ${CMAKE_BINARY_DIR}/grafana/src)
+
+if(WITH_GRAFANA)
+    include_directories(${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include ${CMAKE_BINARY_DIR}/grafana/src)
+else()
+    include_directories(${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include)
+endif()
 
 add_dependencies(iotracer iotrace_skel)
 add_dependencies(iotracer qemu_uprobe_skel)
@@ -56,7 +69,12 @@ add_custom_command(
 )
 
 # Add iotrace_bpf to the iotracer executable
-target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread /usr/local/lib/libprotobuf.a)
+if(WITH_GRAFANA)
+    target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread /usr/local/lib/libprotobuf.a)
+else()
+    target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
+endif()
+
 add_custom_target(iotrace_skel DEPENDS ${CMAKE_SOURCE_DIR}/src/include/iotrace.skel.h)
 
 include_directories(${QEMU_PATH}/include ${QEMU_PATH}/build)
