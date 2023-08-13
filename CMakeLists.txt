@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.0)
 
 project(top)
 
+add_subdirectory(grafana/src)
 add_subdirectory(src)
 
 # produce compile_commands.json
