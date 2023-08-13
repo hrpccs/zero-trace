@@ -5,7 +5,6 @@ cmake_minimum_required(VERSION 3.0)
 project(top)
 
 if(WITH_GRAFANA)
-    message("YES")
     add_subdirectory(grafana/src)
 endif()
 
