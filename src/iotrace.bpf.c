@@ -13,7 +13,7 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 
 #define BIO_TRACE_MASK (1 << BIO_TRACE_COMPLETION)
 
-#define DEBUG 1
+// #define DEBUG 1
 #ifdef DEBUG
 #define bpf_debug(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
 #else
@@ -128,6 +128,7 @@ static int inline get_and_filter_pid(pid_t *tgid, pid_t *tid) {
 
 static int inline get_and_filter_cgid(long long *cgid) {
   *cgid = bpf_get_current_cgroup_id();
+  // bpf_printk("cgid %lld filter_config.cgroup_id %lld\n", *cgid, filter_config.cgroup_id);
   if(filter_config.cgroup_id != -1 && filter_config.cgroup_id != *cgid){
     return 1;
   }
@@ -143,8 +144,9 @@ static int inline filter_inode_dev_dir(struct inode *iinode, struct file *file,
     }
     *inode = ino;
   }
+  dev_t dev = BPF_CORE_READ(iinode, i_sb, s_dev);
+  // bpf_printk("dev %lx filter_config.dev %lx\n", dev, filter_config.dev);
   if (filter_config.dev != 0) {
-    dev_t dev = BPF_CORE_READ(iinode, i_sb, s_dev);
     if (filter_config.dev != dev) {
       return 1;
     }

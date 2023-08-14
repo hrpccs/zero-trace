@@ -90,7 +90,10 @@ struct TraceConfig {
       config->cgroup_id = get_cgroup_id(cgroup_path.c_str());
     }
     if (device_path.size() > 0) {
-      config->dev = get_device_id(device_path.c_str());
+      int dev = get_device_id(device_path.c_str());
+      int major = dev >> 8;
+      int minor = dev & 0xff;
+      config->dev = major << 20 | minor;
     }
     if (file_path.size() > 0) {
       config->inode = get_file_inode(file_path.c_str());

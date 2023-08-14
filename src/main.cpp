@@ -99,9 +99,8 @@ void parse_cmd_args(int argc, char **argv, TraceConfig &config,
       break;
     default:
       fprintf(stderr,
-              "Usage: %s [-p pid] [-t tgid] [-d dev] [-c cgroup] [-f file] [-D "
-              "directory] [-o output] [-w time threshold] [-n command to "
-              "trace]\n",
+              "Usage: %s [-p pid] [-t tid] [-d dev path] [-c cgroup path] [-f file path] [-D "
+              "directory path] [-o output] [-w time threshold] \n",
               argv[0]);
       exit(EXIT_FAILURE);
     }
