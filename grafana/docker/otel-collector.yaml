@@ -1,0 +1,22 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+exporters:
+  otlp:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  logging:
+    loglevel: DEBUG
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]
