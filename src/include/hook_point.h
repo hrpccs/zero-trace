@@ -35,8 +35,8 @@
   X(fs__generic_file_write_iter)                                               \
   X(fs__filemap_get_pages)                                                     \
   X(fs__file_write_and_wait_range)                                             \
-  X(iomap__dio_rw)                                                       \
-  X(sched__switch)                                                       \
+  X(iomap__dio_rw)                                                             \
+  X(sched__switch)                                                             \
   X(pagecache__delete_from_page_cache)                                         \
   X(pagecache__add_to_page_cache)                                              \
   X(pagecache__mark_page_accessed)                                             \
