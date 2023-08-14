@@ -265,6 +265,7 @@ namespace GuestThread
 ### 2、如何运行这个测试
 
 * 安装cereal.确保cereal文件夹被放在这个文件夹或者`/usr/include`中
+* 进入`envtest`文件夹
 * `sudo bash build.sh`编译.如果提示缺少依赖,请自行安装
 * 用`scp`命令或者借助vscode等把可执行文件`client`移动到guest(QEMU)中
     * 如果是在虚拟机中,用vscode中转时经过了Windows物理机,移动到QEMU之后要`chmod +x ./client`恢复权限

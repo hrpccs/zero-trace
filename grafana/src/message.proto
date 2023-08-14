@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+
+enum ProtoTriggerType {
+    proto_trigger_normal = 0;
+    proto_trigger_entry = 1;
+    proto_trigger_exit = 2;
+}
+
+message ProtoEvent {
+    uint64 proto_event_id = 1;
+    uint64 proto_event_duration = 2;
+    ProtoTriggerType proto_trigger_type = 3;
+    
+}
+
+message ProtoRequest {
+    repeated ProtoEvent proto_events = 1;
+    uint64 proto_request_duration = 2;
+}
