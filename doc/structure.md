@@ -4,8 +4,10 @@
 * [CMakeLists.txt](#cmakeliststxt)
 * [doc(dir)](#docdir)
     * [development_report.md](#development_reportmd)
-    * [env&vsock.md](#envvsockmd)
-    * [hookpoint.md](#hookpointmd)
+    * [env.md](#envmd)
+    * [vsock_use.md](#vsock_usemd)
+    * [io_hookpoint.md](#io_hookpointmd)
+    * [qemu_hookpoint.md](#qemu_hookpointmd)
     * [structure.md](#structuremd)
 * [envtest(dir)](#envtestdir)
     * [build.sh](#buildsh)
@@ -22,6 +24,17 @@
     * [vsockutils.cpp](#vsockutilscppvsockutilsh)
     * [vsockutils.h](#vsockutilscppvsockutilsh)
 * [gallery(dir)](#gallerydir)
+* [grafana(dir)](#grafanadir)
+    * [docker(dir)](#dockerdir)
+        * [docker-compose.yaml](#docker-composeyaml)
+        * [otel-collector.yaml](#otel-collectoryaml)
+    * [shared(dir)](#shareddir)
+        * [grafana-datasources.yaml](#grafana-datasourcesyaml)
+        * [tempo.yaml](#tempoyaml)
+    * [src(dir)](#srcdir)
+        * [CMakeLists.txt](#cmakeliststxt-2)
+        * [message.proto](#messageproto)
+        * [server.cc](#servercc)
 * [LICENSE](#license)
 * [README.md](#readmemd-1)
 * [runbenchmark(dir)](#runbenchmarkdir)
@@ -29,7 +42,7 @@
         * [example.txt](#exampletxt)
         * [install_sysbench_ubuntu.sh](#install_sysbench_ubuntush)
     * [launch_benchmark.py](#launch_benchmarkpy)
-* [src(dir)](#srcdir)
+* [src(dir)](#srcdir-1)
     * [CMakeLists.txt](#cmakeliststxt-1)
     * [include(dir)](#includedir)
         * [basic_types.h](#basic_typesh)
@@ -60,11 +73,15 @@
 存放各种文档的目录
 #### [development_report.md](./development_report.md)
 开发文档.其内部介绍了本项目的开发动机,实现思路,一些难点和解决方案,性能分析方法与结果等
-#### [env&vsock.md](./env&vsock.md)
+#### [env.md](./env.md)
 环境配置文档,其介绍了如何配置eBPF(libbpf)环境,如何安装QEMU,如何使得QEMU连接外部网络,如何使用和测试vsock
-附录中还介绍了如果希望在其他程序中使用我们的vsock框架,应该如何使用
-#### [hookpoint.md](./hookpoint.md)
+#### [vsock_use.md](./vsock_use.md)
+介绍了如果希望在其他程序中使用我们的vsock框架,应该如何使用
+该框架已经经过检验,确保可靠
+#### [io_hookpoint.md](./hookpoint.md)
 介绍了eBPF中block layer的一些关键挂载点,便于开发
+#### [qemu_hookpoint.md](./hookpoint.md)
+介绍了eBPF中qemu有关的一些关键挂载点,便于开发
 #### [structure.md](./structure.md)
 也即本文档,介绍每个文件的大致作用.
 ### [envtest(dir)](../envtest/)
@@ -95,6 +112,29 @@
 通信框架最重要的部分,定义了客户端和服务器Engine,可以自动化地完成连接和消息传输
 ### [gallery(dir)](../gallery/)
 所有`.md`文档用到的图片都在其中
+### [grafana(dir)](../grafana/)
+我们使用Grafana可视化框架进行可视化和监控.
+使用Grafana可用轻松地对我们抓取到的Tracing信息进行处理,生成直观的图像,并可以进行一些分析
+#### [docker(dir)](../grafana/docker/)
+我们用docker运行与Grafana有关的组件.
+##### [docker-compose.yaml](../grafana/docker/docker-compose.yaml)
+大家喜闻乐见的docker文件,这涉及到三个容器,也即Grafana,Tempo(数据库)和otel-collector(收集数据)
+##### [otel-collector.yaml](../grafana/docker/otel-collector.yaml)
+otel-collector的一些配置
+#### [shared(dir)](../grafana/shared/)
+一些其他的配置文件,可能被其他软件读取
+##### [grafana-datasources.yaml](../grafana/shared/grafana-datasources.yaml)
+定义了Grafana的数据源
+##### [tempo.yaml](../grafana/shared/tempo.yaml)
+设置了Tempo的种种参数
+#### [src(dir)](../grafana/src/)
+与otel服务器有关的源代码
+##### [CMakeLists.txt](../grafana/src/CMakeLists.txt)
+与Grafana组件相关的编译选项
+##### [message.proto](../grafana/src/message.proto)
+类似于protobuf的通信格式定义.适用于pub-sub架构
+##### [server.cc](../grafana/src/server.cc)
+使用otel进行通信的服务器端组件
 ### [LICENSE](../LICENSE)
 开源协议,本项目遵循GPL2.0协议,他人可以依据该协议将本项目代码用于自己的开源项目中
 ### [README.md](../README.md)
@@ -102,7 +142,7 @@
 ### [runbenchmark(dir)](../runbenchmark/)
 一个性能测试框架,可以测试本Tracing框架的性能
 #### [benchmark(dir)](../runbenchmark/benchmark/)
-待完善
+**待完善**
 ##### [example.txt](../runbenchmark/benchmark/example.txt)
 一个性能测试的例子
 ##### [install_sysbench_ubuntu.sh](../runbenchmark/benchmark/install_sysbench_ubuntu.sh)
