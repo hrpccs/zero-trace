@@ -52,3 +52,13 @@ $ make
 $ sudo ./iotracer  -h 
 ```
 
+## 启动 grafana 可视化
+
+如果你要启动grafana，请将下面这个宏添加到`src/include/basic_types.h`
+```
+#define GRAFANA
+```
+并在编译时采用如下命令
+```
+cmake -S . -B build -DWITH_GRAFANA=ON
+```
