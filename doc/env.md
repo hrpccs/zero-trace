@@ -3,6 +3,7 @@
 # 环境配置与vsock使用
 
 - [一、eBPF环境配置](#一eBPF环境配置)
+  - [WSL需要的特殊操作](#如果在wsl中使用还需要进行如下操作)
 - [二、virtio之QEMU环境配置](#二virtio之QEMU环境配置)
   - [1、QEMU依赖的安装](#1QEMU依赖的安装)
   - [2、内层虚拟机(QEMU)安装](#2内层虚拟机(QEMU)安装)
@@ -24,7 +25,12 @@
 
 注意内核被编译时,`CONFIG_DEBUG_INFO_BTF=y` and `CONFIG_DEBUG_INFO_BTF_MODULES=y`选项应该被设置.
 
-* 就目前开发经验而言,这两个选项通常都默认被设置
+* 就目前开发经验而言,这两个选项通常都默认被设置,比如以下的一些发行版
+
+- Ubuntu 20.10+
+- Fedora 31+
+- RHEL 8.2+
+- Debian 11+
 
 部分安装操作需要比较快的Github访问,这需要自行解决.
 
@@ -35,6 +41,19 @@ sudo apt-get install -y make clang llvm libelf-dev linux-tools-$(uname -r)
 ```
 
 在不使用virtio(QEMU)时,只需要安装一次.如果使用virtio,在QEMU内部也需要安装一次
+
+**注意:** 我们在C++中开发eBPF用户态程序,用bpftool生成追踪框架的骨架.我们使用的部分特性要求bpftool版本不低于v6.8.[查看这里](https://github.com/libbpf/bpftool/releases/tag/v6.8.0).
+
+### 如果在WSL中使用,还需要进行如下操作
+
+```
+# WSL2 
+# bpftool which shall be compiled and installed from kernel souce code provided by Microsoft
+# source code
+https://github.com/microsoft/WSL2-Linux-Kernel 
+# can reffer to link below for instruction
+https://gist.github.com/MarioHewardt/5759641727aae880b29c8f715ba4d30f
+```
 
 ## 二、virtio之QEMU环境配置
 
