@@ -81,11 +81,7 @@ VSockEngine::VSockEngine() {
   registerHelpers();
 }
 
-// sendhelper:Covert data to string,return string length
-// int helper(std::any obj,char *& str)
-// recvhelper:Covert string to data
-// int helper(std::any & obj,char * str)
-
+//For debugging
 void decodec(char *buf, int len) {
   for (int i = 0; i < len; i++) {
     unsigned char j = buf[i];

@@ -103,18 +103,6 @@ int recvMesg(enum Type & type,void *& obj);
 
 因为guest和host的时钟未必同步,所以我们需要对guest的时钟进行修正
 
-我们假设,传输同样的数据,guest发给host和host发给guest时间大致相同(对于vsock,因为不是真正走WAN,所以大体上可以保证这一点)
-
-<img src="../gallery/environment&vsocks/image-20230810225336845.png" alt="image-20230810225336845" style="zoom:50%;" />
-
-$$
-T'_1-T_1=t_{trans}-\Delta t\\
-T_2-T'_2=t_{trans}+\Delta t\\
-2\Delta t=T_2-T'_2+T_1-T'_1\\
-\Delta t=\frac{T_2-T'_2+T_1-T'_1}{2}
-$$
-
-如此便算出了(本机时间-远端时间)的值.对时钟的请求既可以由host发出,又可以由guest发出
 
 调用`getDelta`方法,可以获取这个差值
 

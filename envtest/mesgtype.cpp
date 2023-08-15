@@ -25,7 +25,7 @@ int recv_helper_ ## TYPE(void *& obj,char * str,int len)        \
     return 1;                                                   \
 }
 
-
+//For debugging
 void decode(std::string  str)
 {
     for(int i = 0;i < str.length();i++)
