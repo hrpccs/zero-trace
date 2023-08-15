@@ -15,7 +15,7 @@ zero-tracer 可以用于常态化部署，辅助运维人员定位业务时延�
 - [挂载点语义文档](./doc/io_hookpoint.md)
 - [环境配置文档](./doc/env.md)
 
-可以**查看我们的[开发文档](doc/复赛开发文档.md)**来了解我们的工作
+可以查看我们的[复赛开发文档](doc/复赛开发文档.md)来了解我们的工作
 也可以访问我们的[Github页面](https://github.com/hrpccs/zero-trace)
 
 ![arch](gallery/arch.png)
