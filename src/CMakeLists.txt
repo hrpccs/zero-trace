@@ -3,49 +3,47 @@ cmake_minimum_required(VERSION 3.10)
 
 project(iotracer)
 
-# Set the C standard to C11
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_COMPILER "clang")
 
-# Set the C++ standard to C++17
 set(CMAKE_CXX_STANDARD 17)
-
-# Set the compiler for C++ files to clang++
 set(CMAKE_CXX_COMPILER "clang++")
 add_compile_options(-g -O2 -static)
 
-# add protobuf
 if(WITH_GRAFANA)
+    find_package(opentelemetry-cpp CONFIG REQUIRED)
+    find_package(nlohmann_json QUIET)
     find_package(Protobuf REQUIRED)
-
-    set(PROTO_FILES ${CMAKE_SOURCE_DIR}/grafana/src/message.proto)
-    protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
-
-    include_directories(${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/grafana/src)
-else()
-    include_directories(${CMAKE_BINARY_DIR})
+    find_package(CURL REQUIRED)
 endif()
+
+include_directories(${CMAKE_BINARY_DIR})
 
 # static link
-set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ -static -Wl,--whole-archive -lpthread -Wl,--no-whole-archive")
+set(CMAKE_EXE_LINKER_FLAGS
+    "-static-libgcc 
+    -static-libstdc++ 
+    -static -Wl,
+    --whole-archive 
+    -lpthread -Wl,
+    --no-whole-archive")
 
-# Add all C++ files in the src directory to the project
 file(GLOB_RECURSE CPP_SOURCES "*.cpp")
+add_executable(iotracer ${CPP_SOURCES})
 
-# Add the C and C++ sources to the project
-if(WITH_GRAFANA)
-    add_executable(iotracer ${CPP_SOURCES} ${PROTO_SRCS})
-else()
-    add_executable(iotracer ${CPP_SOURCES})
-endif()
-
-# include_directories( ${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include /usr/include)
 set(QEMU_PATH ${CMAKE_SOURCE_DIR}/src/../qemu)
 
 if(WITH_GRAFANA)
-    include_directories(${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include ${CMAKE_BINARY_DIR}/grafana/src)
+    include_directories(${CMAKE_SOURCE_DIR}/src/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi
+        /usr/include
+        ${OPENTELEMETRY_CPP_INCLUDE_DIRS})
 else()
-    include_directories(${CMAKE_SOURCE_DIR}/src/include ${CMAKE_BINARY_DIR}/include ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi /usr/include)
+    include_directories(${CMAKE_SOURCE_DIR}/src/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi
+        /usr/include)
 endif()
 
 add_dependencies(iotracer iotrace_skel)
@@ -68,12 +66,7 @@ add_custom_command(
     DEPENDS iotrace_bpf iotrace_bpf_program
 )
 
-# Add iotrace_bpf to the iotracer executable
-if(WITH_GRAFANA)
-    target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread /usr/local/lib/libprotobuf.a)
-else()
-    target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
-endif()
+target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
 
 add_custom_target(iotrace_skel DEPENDS ${CMAKE_SOURCE_DIR}/src/include/iotrace.skel.h)
 
