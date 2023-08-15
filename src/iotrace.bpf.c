@@ -8,6 +8,7 @@
 #include "event_defs.h"
 #include "hook_point.h"
 #include "system_macro.h"
+#include "vmlinux.h"
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
@@ -2616,12 +2617,30 @@ int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
   return 0;
 }
 
+<<<<<<< HEAD
 
 // //rq_qos_issue
 // SEC("fentry/__rq_qos_issue")
 // int BPF_PROG(trace_rq_qos_issue, struct rq_qos *q, struct request *rq)
 // {
 //   if(!block_enable){
+=======
+// TP_PROTO(struct bio *bio, unsigned int new_sector),
+
+// SEC("raw_tp/block_split") // TODO:
+// int raw_tracepoint__block_split(struct bpf_raw_tracepoint_args *ctx) {
+//   struct bio *bio = (struct bio *)(ctx->args[0]);
+//   // unsigned int new_sector = (unsigned int)(ctx->args[1]);
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+//   // if (common_filter(tid, tgid, dev, 0, 0)) {
+//   //   return 1;
+//   // }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
+//   0); if (!task_info) {
+>>>>>>> 3ab4bd32a73af25f1e6bdf9868355b60145dfa51
 //     return 0;
 //   }
 //   long long rq_id;
@@ -2629,11 +2648,44 @@ int handle_tp2(struct bpf_raw_tracepoint_args *ctx)
 //   if (request_ref == NULL) {
 //     return 0;
 //   }
+<<<<<<< HEAD
 //   rq_id = *request_ref;
 // 	long nr_bytes = rq->__data_len;
 // 	sector_t sector = rq->__sector;
 //   struct event* e = bpf_ringbuf_reserve(&ringbuffer, sizeof(struct event), 0);
 //   if(e == NULL){
+=======
+//   task_info->bio_info.parent_bio = (unsigned long long)parent_bio;
+//   bi_iter = BPF_CORE_READ(parent_bio, bi_iter);
+//   task_info->bio_info.bvec_idx_end = bi_iter.bi_idx;
+//   bpf_ringbuf_submit(task_info, 0);
+//   return 0;
+// }
+
+// TP_PROTO(struct bio *bio, dev_t dev, sector_t from),
+// TP_fast_assign(
+// 		__entry->dev		= bio_dev(bio);
+// 		__entry->sector		= bio->bi_iter.bi_sector;
+// 		__entry->nr_sector	= bio_sectors(bio);
+// 		__entry->old_dev	= dev;
+// 		__entry->old_sector	= from;
+// 		blk_fill_rwbs(__entry->rwbs, bio->bi_opf);
+// 	),
+// SEC("raw_tp/block_bio_remap")
+// int raw_tracepoint__block_bio_remap(struct bpf_raw_tracepoint_args *ctx) {
+//   struct bio *bio = (struct bio *)(ctx->args[0]);
+//   dev_t old_dev = (dev_t)(ctx->args[1]);
+//   sector_t from = (sector_t)(ctx->args[2]);
+//   u64 id = bpf_get_current_pid_tgid();
+//   pid_t tgid = id >> 32;
+//   pid_t tid = id & 0xffffffff;
+//   dev_t dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+//   if (common_filter(tid, tgid, dev, 0, 0)) {
+//     return 1;
+//   }
+//   struct event *task_info = bpf_ringbuf_reserve(&rb, sizeof(struct event),
+//   0); if (!task_info) {
+>>>>>>> 3ab4bd32a73af25f1e6bdf9868355b60145dfa51
 //     return 0;
 //   }
 //   e->event_type = block__rq_issue;

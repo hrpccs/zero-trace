@@ -653,7 +653,7 @@ struct page {
 
 **下面阐述获取某个 bio 数据结构在 block layer 与 driver layer 中的经过流程的原理与方法。**
 
-经过深入 linux 5.15 版本内核 block layer 相关的代码 [block layer 挂载点分析](./blktrace-tracepoint 挂载点语义分析.md)，目前我们可以提出两种获取 bio 相关事件的方法。
+经过深入 linux 5.15 版本内核 block layer 相关的代码 [block layer 挂载点分析](./hookpoint.md)，目前我们可以提出两种获取 bio 相关事件的方法。
 
 这两种方法的原理是一致的，在介绍两个方法前，需要先了解内核中 bio 与 request 的关系。简单来说就是一个 request 会包含数个读写目标物理扇区连续的 bio，然后以 request 为颗粒度在 IO 调度器队列、driver 队列、driver 内部处理流动，直到该 request 的一部分目标物理扇区的读写完成，该部分扇区对应的 bio 才会标记成已完成并且才会脱离该 request。
 

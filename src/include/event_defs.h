@@ -1,8 +1,8 @@
 #pragma once
 
 #include "hook_point.h"
-#define MAX_COMM_LEN 80
-#define MAX_BIO_PER_RQ 31
+#define MAX_COMM_LEN     80
+#define MAX_BIO_PER_RQ   31
 #define MAX_BVEC_PER_BIO 255
 #define MAXLEN_VMA_NAME 64
 #define MAX_LEVEL 8

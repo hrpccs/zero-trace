@@ -63,8 +63,8 @@
 enum kernel_hook_type { KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_ENUM) };
 
 #define KERNEL_HOOK_TYPE_STR(name) #name,
-static const char *kernel_hook_type_str[] = {
-    KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_STR)};
+static const char* kernel_hook_type_str[] = {
+        KERNEL_HOOK_TYPE_DEF(KERNEL_HOOK_TYPE_STR)};
 
 #define LAYER_DEF(X)                                                           \
   X(qemu_layer)                                                                      \
