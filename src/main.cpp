@@ -100,7 +100,7 @@ void parse_cmd_args(int argc, char **argv, TraceConfig &config,
     default:
       fprintf(stderr,
               "Usage: %s [-p pid] [-t tid] [-d dev path] [-c cgroup path] [-f file path] [-D "
-              "directory path] [-o output] [-w time threshold] \n",
+              "directory path] [-o output] [-w time threshold] [-G run as guest] [-H run as host] \n",
               argv[0]);
       exit(EXIT_FAILURE);
     }

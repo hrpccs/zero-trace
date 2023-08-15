@@ -1,10 +1,21 @@
 # 简介
-本框架是一个基于eBPF的追踪框架,目的是在低开销下对一些内核路径进行追踪和性能分析
-这个项目的灵感来自于[oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
+本项目实现了一个名为 zero-tracer 的 eBPF tracing 工具，它能够追踪 read/write 等 IO 系统调用在内核中各个子模块中的处理流程，并且在 12k read iops 和 250 write iops 环境下能保持小于 5% 的系统 CPU 开销。zero 表示低开销。
 
-我们已经实现了对Linux的I/O调用栈路径的追踪,包括文件系统层次和Block层次.这一部分被我们称为"IO wpTracer" (IO whole path tracer).
+zero-tracer 可以用于常态化部署，辅助运维人员定位业务时延抖动，还可以用于分析性能瓶颈以及优化数据通路。
 
-可以**查看我们的[开发文档](doc/development_report.md)**来了解我们的工作
+并且，我们把 zero-tracer 拓展到了 qemu/kvm 场景下的 virtio 从 guest 到 qemu 再到 host 的全链路追踪。这加强了 zero-tracer 在虚拟化场景下的实用性。
+
+本项目来自于[oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
+
+文档列表：
+- [复赛开发文档](./doc/复赛开发文档.md)
+- [项目文件结构描述文档](./doc/structure.md)
+- [性能测试文档](./doc/performance-test.md)
+- [功能测试文档](./doc/functional-test.md)
+- [挂载点语义文档](./doc/io_hookpoint.md)
+- [环境配置文档](./doc/env.md)
+
+可以**查看我们的[开发文档](doc/复赛开发文档.md)**来了解我们的工作
 也可以访问我们的[Github页面](https://github.com/hrpccs/zero-trace)
 
 ![arch](gallery/arch.png)
@@ -17,46 +28,27 @@
 
 请参考[环境配置文档](./doc/env.md)
 
+## 编译 qemu
+
+本项目依赖于 qemu 的头文件，编译脚本默认从本项目根目录下的 qemu 目录下找
+
+如果你需要进行 qemu/kvm 下 virtio 追踪的验证，需要把 `src/qemu_uprobe.bpf.c` 下的 QEMU_EXE 改成你编译出来的带符号表的 qemu 二进制文件。
+
+
+```bash
+$ cd qemu
+$ git checkout v6.0.0
+$ mkdir build && cd build
+$ ../configure
+$ make 
+```
+
 ## 编译运行
 
 ```bash
-$ cmake -S . -B build -DWITH_GRAFANA=ON/OFF
+$ cmake -S . -B build -DWITH_GRAFANA=OFF
 $ cd build 
 $ make 
-$ sudo ./iotracer  -w 1.0 -o log -T 2 -n  "task name to trace" e.g. you can use sysbench located at runbenchmark dir.
+$ sudo ./iotracer  -h 
 ```
-
-
-# Introduction
-We are currently developing a tracing framework based on eBPF, which aims to trace the entire path of system calls under low overhead. This project was inspired by [oscomp-proj133](https://github.com/oscomp/proj133-ebpf-tracing-framework).
-
-We have completed a part of the framework. It is now able to trace the entire path of the read/write syscall within the Linux I/O stack, including the FS layer and Block layer. And we call this part of the framework "IO wpTracer" (IO whole path tracer).
-
-**You can check our [development report](doc/development_report.md)**, which describes our work.
-And you can also visit our [GitHub repository](https://github.com/hrpccs/zero-trace).
-
-
-![arch](gallery/arch.png)
-
-
-
-The project is based on eBPF and Libbpf+CO-RE. To compile this project, you'll need to:
-- Enable Libbpf+CO-RE 
-- Make sure your linux kernel supports eBPF and provide BTF.
-
-### Dependencies: libbpf + CO-RE
-
-See [Environment Setting Document](./doc/env.md)
-
-
-### Build and Run our demo
-
-```bash
-$ cmake -S . -B build -DWITH_GRAFANA=ON/OFF
-$ cd build 
-$ make 
-$ sudo ./iotracer  -w 1.0 -o log -T 2 -n  "task name to trace" e.g. you can use sysbench located at runbenchmark dir.
-```
-
-
 

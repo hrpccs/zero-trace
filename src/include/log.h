@@ -49,41 +49,41 @@ public:
 #include <string>
 #include <netinet/in.h>
 #include <sys/socket.h>
-// #include "message.pb.h"
+#include "message.pb.h"
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <iostream>
 
-// class GrafanaClientLogHandler : public DoneRequestHandler
-// {
-// public:
-//     GrafanaClientLogHandler(const std::string &file_name)
-//     {
+class GrafanaClientLogHandler : public DoneRequestHandler
+{
+public:
+    GrafanaClientLogHandler(const std::string &file_name)
+    {
 
-//         if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-//         {
-//             perror("Error creating socket");
-//         }
+        if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+        {
+            perror("Error creating socket");
+        }
 
-//         memset(&server_addr, 0, sizeof(server_addr));
-//         server_addr.sin_family = AF_INET;
-//         server_addr.sin_port = htons(12345);
-//         server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(12345);
+        server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-//         std::cout << "Connected to server" << std::endl;
-//     }
+        std::cout << "Connected to server" << std::endl;
+    }
 
-//     ~GrafanaClientLogHandler()
-//     {
-//         close(sockfd);
-//     }
+    ~GrafanaClientLogHandler()
+    {
+        close(sockfd);
+    }
 
-//     virtual void HandleDoneRequest(std::shared_ptr<Request>, TraceConfig &) override;
+    virtual void HandleDoneRequest(std::shared_ptr<Request>, TraceConfig &) override;
 
-//     int sockfd;
-//     struct sockaddr_in server_addr;
+    int sockfd;
+    struct sockaddr_in server_addr;
 
-//     int skipped_requests = 0;
-//     int total_requests = 0;
-//     double estimated_avg_time = 0;
-// };
+    int skipped_requests = 0;
+    int total_requests = 0;
+    double estimated_avg_time = 0;
+};

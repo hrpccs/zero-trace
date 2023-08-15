@@ -196,3 +196,8 @@ sudo ./iotracer -G -f /mnt/virtblk/diska/test.txt -w 1
 可以看到一个超时的 fatasync 系统调用，可以看到整个 IO 处理流程经过了 guest OS ，qemu 的 virtblk 模块，然后再到 Host OS 处理。
 
 可以验证我们的追踪 virtblk 的存储 IO 从 guest 到 host 全流程功能是正常的。
+
+## grafana 展示
+我们通过 opentelemety 把 trace 信息接入到 grafana，可以看到以下效果
+
+![grafana](../gallery/复赛文档/grafana.gif)

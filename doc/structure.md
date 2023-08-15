@@ -142,7 +142,7 @@ otel-collector的一些配置
 ### [runbenchmark(dir)](../runbenchmark/)
 一个性能测试框架,可以测试本Tracing框架的性能
 #### [benchmark(dir)](../runbenchmark/benchmark/)
-**待完善**
+可以用 sysbench 进行 io benchmark
 ##### [example.txt](../runbenchmark/benchmark/example.txt)
 一个性能测试的例子
 ##### [install_sysbench_ubuntu.sh](../runbenchmark/benchmark/install_sysbench_ubuntu.sh)
@@ -162,7 +162,7 @@ Tracing所需要的一些基本的数据结构,包括了处理后的事件,内�
 ##### [hook_point.h](../src/include/hook_point.h)
 定义了各个挂载点和I/O请求各个层次的类型
 ##### [iotracer.h](../src/include/iotracer.h)
-
+定义了 IOTracer 这个类以及一些重要的功能
 ##### [log.h](../src/include/log.h)
 将日志写到文件里的模块的头文件
 ##### [mesgtype.h](../src/mesgtype.cpp)
@@ -181,7 +181,7 @@ Tracing所需要的一些基本的数据结构,包括了处理后的事件,内�
 #### [iotrace.bpf.c](../src/iotrace.bpf.c)
 与tracing相关的各个挂载点,除了QEMU之外
 #### [iotracer.cpp](../src/iotracer.cpp)
-**待完善**
+IOTracer 处理内核 ringbuffer 事件时对不同事件的处理流程
 #### [log.cpp](../src/log.cpp)
 将日志写到文件里的模块
 #### [main.cpp](../src/main.cpp)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/* Copyright (c) 2020 Facebook */
+/* Copyright (c) 2023 Ruipeng Hong SYSU */
 #include <linux/bpf.h>
 #include <linux/ptrace.h>
 #include <bpf/bpf_core_read.h>
@@ -14,11 +14,14 @@
 #include "block/aio_task.h"
 #include "standard-headers/linux/virtio_blk.h"
 #include "system_macro.h"
-// #include "scsi/pr-manager.h"
+
+
+// 把 QEMU_EXE 改成你自己编译出来的 QEMU 的路径
+#define QEMU_EXE "/home/hrpccs/workspace/qemu-proj/qemu/build/x86_64-softmmu/qemu-system-x86_64"
+#define QEMU_HOOK(hook_point_name) "uprobe/" QEMU_EXE ":"  hook_point_name
+#define QEMU_RET_HOOK(hook_point_name) "uretprobe/" QEMU_EXE ":"  hook_point_name
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
-
-
 
 // #define DEBUG 1
 #ifdef DEBUG
@@ -32,10 +35,6 @@ struct {
   __uint(pinning, LIBBPF_PIN_BY_NAME); // 不同文件的 rb 会共享成一个
 } ringbuffer SEC(".maps");
 
-// 把 QEMU_EXE 改成你自己编译出来的 QEMU 的路径
-#define QEMU_EXE "/home/hrpccs/workspace/qemu-proj/qemu/build/x86_64-softmmu/qemu-system-x86_64"
-#define QEMU_HOOK(hook_point_name) "uprobe/" QEMU_EXE ":"  hook_point_name
-#define QEMU_RET_HOOK(hook_point_name) "uretprobe/" QEMU_EXE ":"  hook_point_name
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
