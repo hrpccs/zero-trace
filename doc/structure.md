@@ -3,12 +3,16 @@
 ## 一.项目总体结构
 * [CMakeLists.txt](#cmakeliststxt)
 * [doc(dir)](#docdir)
-    * [development_report.md](#development_reportmd)
+    * [初赛开发文档.md](#初赛开发文档md)
+    * [复赛开发文档.md](#复赛开发文档md)
+    * [devplan.md](#devplanmd)
     * [env.md](#envmd)
-    * [vsock_use.md](#vsock_usemd)
+    * [functional_test.md](#functional_testmd)
+    * [performance_test.md](#performance_testmd)
     * [io_hookpoint.md](#io_hookpointmd)
-    * [qemu_hookpoint.md](#qemu_hookpointmd)
+    * [process.md](#processmd)
     * [structure.md](#structuremd)
+    * [vsock_use.md](#vsock_usemd)
 * [envtest(dir)](#envtestdir)
     * [build.sh](#buildsh)
     * [client.cpp](#clientcpp)
@@ -31,10 +35,6 @@
     * [shared(dir)](#shareddir)
         * [grafana-datasources.yaml](#grafana-datasourcesyaml)
         * [tempo.yaml](#tempoyaml)
-    * [src(dir)](#srcdir)
-        * [CMakeLists.txt](#cmakeliststxt-2)
-        * [message.proto](#messageproto)
-        * [server.cc](#servercc)
 * [LICENSE](#license)
 * [README.md](#readmemd-1)
 * [runbenchmark(dir)](#runbenchmarkdir)
@@ -71,17 +71,27 @@
 顶层的CMakeList文件,用来帮助编译的
 ### [doc(dir)](.)
 存放各种文档的目录
-#### [development_report.md](./development_report.md)
-开发文档.其内部介绍了本项目的开发动机,实现思路,一些难点和解决方案,性能分析方法与结果等
+#### [初赛开发文档.md](./初赛开发文档.md)
+初赛期间形成的开发文档
+初赛阶段主要是对于磁盘读写的VFS,Block,Driver层实现追踪,并且能处理Block层Split和Merge操作
+但是性能相对较差
+#### [复赛开发文档.md](./复赛开发文档.md)
+复赛期间形成的开发文档
+主要包括Grafana开发,QEMU配置,vsock通信框架开发,通过过滤机制和合理的挂载点实现的性能优化,virtio的Tracing
+#### [devplan.md](./devplan.md)
+开发计划
 #### [env.md](./env.md)
 环境配置文档,其介绍了如何配置eBPF(libbpf)环境,如何安装QEMU,如何使得QEMU连接外部网络,如何使用和测试vsock
 #### [vsock_use.md](./vsock_use.md)
 介绍了如果希望在其他程序中使用我们的vsock框架,应该如何使用
 该框架已经经过检验,确保可靠
+#### [functional_test.md](./functional_test.md)
+功能测试文档,证明我们已经实现了上述功能
+#### [performance_test.md](./performance_test.md)
+性能测试文档,证明我们已经达到了较好的性能
 #### [io_hookpoint.md](./hookpoint.md)
 介绍了eBPF中block layer的一些关键挂载点,便于开发
-#### [qemu_hookpoint.md](./hookpoint.md)
-介绍了eBPF中qemu有关的一些关键挂载点,便于开发
+#### [process.md]()
 #### [structure.md](./structure.md)
 也即本文档,介绍每个文件的大致作用.
 ### [envtest(dir)](../envtest/)
@@ -126,15 +136,7 @@ otel-collector的一些配置
 ##### [grafana-datasources.yaml](../grafana/shared/grafana-datasources.yaml)
 定义了Grafana的数据源
 ##### [tempo.yaml](../grafana/shared/tempo.yaml)
-设置了Tempo的种种参数
-#### [src(dir)](../grafana/src/)
-与otel服务器有关的源代码
-##### [CMakeLists.txt](../grafana/src/CMakeLists.txt)
-与Grafana组件相关的编译选项
-##### [message.proto](../grafana/src/message.proto)
-类似于protobuf的通信格式定义.适用于pub-sub架构
-##### [server.cc](../grafana/src/server.cc)
-使用otel进行通信的服务器端组件
+设置了Tempo的种种参数的配置文件
 ### [LICENSE](../LICENSE)
 开源协议,本项目遵循GPL2.0协议,他人可以依据该协议将本项目代码用于自己的开源项目中
 ### [README.md](../README.md)

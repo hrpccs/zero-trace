@@ -1,7 +1,7 @@
 #ifndef MESGTYPE_H_
 #define MESGTYPE_H_
 
-#define SMALL_MESG_LIMIT_BYTES 10   //应该设置为4的倍数
+#define SMALL_MESG_LIMIT_BYTES 20   //应该设置为4的倍数
 #define TIMEOUT_NS 60000000000LL    //long long类型
 
 #define TYPES 2

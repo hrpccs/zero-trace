@@ -10,8 +10,8 @@ zero-tracer 可以用于常态化部署，辅助运维人员定位业务时延�
 文档列表：
 - [复赛开发文档](./doc/复赛开发文档.md)
 - [项目文件结构描述文档](./doc/structure.md)
-- [性能测试文档](./doc/performance-test.md)
-- [功能测试文档](./doc/functional-test.md)
+- [性能测试文档](./doc/performance_test.md)
+- [功能测试文档](./doc/functional_test.md)
 - [挂载点语义文档](./doc/io_hookpoint.md)
 - [环境配置文档](./doc/env.md)
 

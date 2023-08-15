@@ -53,8 +53,6 @@ int VSockEngine::sendstr(char * str,enum Type type,int len)
         abort();
     }
     
-    
-
     if(len > SMALL_MESG_LIMIT_BYTES)
     {
         ret = write(sock_client, (void *)str, len);
@@ -64,8 +62,6 @@ int VSockEngine::sendstr(char * str,enum Type type,int len)
             abort();
         }
     }
-    
-
     return ret;
 }
 
@@ -94,8 +90,6 @@ int VSockEngine::recvstr(char *& str,enum Type & type,int & len)
         {
             fprintf(stderr,"read error\n");
         }
-
-    
     }
     return ret; 
 }
@@ -108,13 +102,7 @@ VSockEngine::VSockEngine()
 }
 
 
-
-
-//sendhelper:Covert data to string,return string length
-//int helper(std::any obj,char *& str)
-//recvhelper:Covert string to data
-//int helper(std::any & obj,char * str)
-
+//For debugging
 void decodec(char * buf,int len)
 {
     for(int i = 0;i < len;i++)
