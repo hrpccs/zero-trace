@@ -5,12 +5,10 @@
 * [doc(dir)](#docdir)
     * [初赛开发文档.md](#初赛开发文档md)
     * [复赛开发文档.md](#复赛开发文档md)
-    * [devplan.md](#devplanmd)
     * [env.md](#envmd)
     * [functional_test.md](#functional_testmd)
     * [performance_test.md](#performance_testmd)
     * [io_hookpoint.md](#io_hookpointmd)
-    * [process.md](#processmd)
     * [structure.md](#structuremd)
     * [vsock_use.md](#vsock_usemd)
 * [envtest(dir)](#envtestdir)
@@ -78,8 +76,6 @@
 #### [复赛开发文档.md](./复赛开发文档.md)
 复赛期间形成的开发文档
 主要包括Grafana开发,QEMU配置,vsock通信框架开发,通过过滤机制和合理的挂载点实现的性能优化,virtio的Tracing
-#### [devplan.md](./devplan.md)
-开发计划
 #### [env.md](./env.md)
 环境配置文档,其介绍了如何配置eBPF(libbpf)环境,如何安装QEMU,如何使得QEMU连接外部网络,如何使用和测试vsock
 #### [vsock_use.md](./vsock_use.md)
@@ -91,7 +87,6 @@
 性能测试文档,证明我们已经达到了较好的性能
 #### [io_hookpoint.md](./hookpoint.md)
 介绍了eBPF中block layer的一些关键挂载点,便于开发
-#### [process.md]()
 #### [structure.md](./structure.md)
 也即本文档,介绍每个文件的大致作用.
 ### [envtest(dir)](../envtest/)
