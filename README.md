@@ -1,7 +1,7 @@
 # 简介
-本项目实现了一个名为 zero-tracer 的 eBPF tracing 工具，它能够追踪 read/write 等 IO 系统调用在内核中各个子模块中的处理流程，并且在 12k read iops 和 250 write iops 环境下能保持小于 5% 的系统 CPU 开销。zero 表示低开销。
+本项目提供了一个具有高效率过滤机制的提供内核存储 IO 涉及的 fs、block、driver 层的挂载点，可以高效追踪 bio,request,page等数据结构的 tracing 框架，并且基于该框架开发了 zero-tracer。
 
-zero-tracer 可以用于常态化部署，辅助运维人员定位业务时延抖动，还可以用于分析性能瓶颈以及优化数据通路。
+zero-tracer 能够追踪 read/write 等 IO 系统调用在内核中各个子模块中的处理流程，并且在 12k read iops 和 250 write iops 环境下能保持小于 5% 的系统 CPU 开销。并且可以用于常态化部署，辅助运维人员定位业务时延抖动，还可以用于分析性能瓶颈以及优化数据通路。
 
 并且，我们把 zero-tracer 拓展到了 qemu/kvm 场景下的 virtio 从 guest 到 qemu 再到 host 的全链路追踪。这加强了 zero-tracer 在虚拟化场景下的实用性。
 
