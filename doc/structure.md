@@ -181,7 +181,7 @@ Tracing所需要的一些基本的数据结构,包括了处理后的事件,内�
 #### [iotrace.bpf.c](../src/iotrace.bpf.c)
 与tracing相关的各个挂载点,除了QEMU之外
 #### [iotracer.cpp](../src/iotracer.cpp)
-
+**待完善**
 #### [log.cpp](../src/log.cpp)
 将日志写到文件里的模块
 #### [main.cpp](../src/main.cpp)
