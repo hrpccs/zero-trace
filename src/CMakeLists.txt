@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 project(iotracer)
-
+find_package(opentelemetry-cpp CONFIG REQUIRED)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_COMPILER "clang")
 
@@ -10,41 +10,21 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_COMPILER "clang++")
 add_compile_options(-g -O2 -static)
 
-if(WITH_GRAFANA)
-    find_package(opentelemetry-cpp CONFIG REQUIRED)
-    find_package(nlohmann_json QUIET)
-    find_package(Protobuf REQUIRED)
-    find_package(CURL REQUIRED)
-endif()
+find_package(nlohmann_json QUIET)
+find_package(Protobuf REQUIRED)
+find_package(CURL REQUIRED)
 
 include_directories(${CMAKE_BINARY_DIR})
-
-# static link
-set(CMAKE_EXE_LINKER_FLAGS
-    "-static-libgcc 
-    -static-libstdc++ 
-    -static -Wl,
-    --whole-archive 
-    -lpthread -Wl,
-    --no-whole-archive")
-
 file(GLOB_RECURSE CPP_SOURCES "*.cpp")
 add_executable(iotracer ${CPP_SOURCES})
-
 set(QEMU_PATH ${CMAKE_SOURCE_DIR}/src/../qemu)
 
-if(WITH_GRAFANA)
-    include_directories(${CMAKE_SOURCE_DIR}/src/include
-        ${CMAKE_BINARY_DIR}/include
-        ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi
-        /usr/include
-        ${OPENTELEMETRY_CPP_INCLUDE_DIRS})
-else()
-    include_directories(${CMAKE_SOURCE_DIR}/src/include
-        ${CMAKE_BINARY_DIR}/include
-        ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi
-        /usr/include)
-endif()
+include_directories(
+    ${CMAKE_SOURCE_DIR}/src/include 
+    ${CMAKE_BINARY_DIR}/include 
+    ${CMAKE_BINARY_DIR}/src/libbpf/include/uapi 
+    /usr/include 
+    ${OPENTELEMETRY_CPP_INCLUDE_DIRS})
 
 add_dependencies(iotracer iotrace_skel)
 add_dependencies(iotracer qemu_uprobe_skel)
@@ -66,7 +46,13 @@ add_custom_command(
     DEPENDS iotrace_bpf iotrace_bpf_program
 )
 
-target_link_libraries(iotracer ${CMAKE_BINARY_DIR}/lib64/libbpf.a elf z pthread)
+target_link_libraries(
+    iotracer 
+    ${CMAKE_BINARY_DIR}/lib64/libbpf.a 
+    elf 
+    z 
+    pthread 
+    ${OPENTELEMETRY_CPP_LIBRARIES}   )
 
 add_custom_target(iotrace_skel DEPENDS ${CMAKE_SOURCE_DIR}/src/include/iotrace.skel.h)
 

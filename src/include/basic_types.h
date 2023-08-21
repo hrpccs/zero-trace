@@ -16,9 +16,8 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-// enable grafana by
-// #define GRAFANA
+#include "otlp.h"
+#include "config.h"
 
 class Event {
   public:
@@ -177,25 +176,32 @@ class Request {
     }
     virtual ~Request() {
 #ifdef GRAFANA
-        spans[0]->End();
+        while (spans.size() > 0) {
+            spans.back()->End();
+            spans.pop_back();
+        }
 #endif
     }
     virtual void addEvent(std::unique_ptr<Event> event) {
 #ifdef GRAFANA
-        const char* event_type = kernel_hook_type_str[event->event_type];
-        if (event->trigger_type == ENTRY) {
-            opentelemetry::v1::trace::StartSpanOptions so;
-            so.parent = spans.back()->GetContext();
-            spans.push_back(get_tracer()->StartSpan(event_type, so));
-        } else if (event->trigger_type == EXIT) {
-            spans.back()->End();
-            spans.pop_back();
-        } else {
-            opentelemetry::v1::trace::StartSpanOptions so;
-            so.parent = spans.back()->GetContext();
-            auto scope = opentelemetry::trace::Scope(
-                    get_tracer()->StartSpan(event_type, so));
-            // ends immediately
+        printf("add Event\n");
+        if (spans.size() > 0) {
+            const char* event_type = kernel_hook_type_str[event->event_type];
+            if (event->trigger_type == ENTRY) {
+                {
+                    opentelemetry::v1::trace::StartSpanOptions so;
+                    so.parent = spans.back()->GetContext();
+                    spans.push_back(get_tracer()->StartSpan(event_type, so));
+                }
+            } else if (event->trigger_type == EXIT) {
+                if (spans.size() > 0) {
+                    spans.back()->End();
+                    spans.pop_back();
+                }
+            } else {
+                // ends immediately
+                spans.back()->AddEvent(event_type);
+            }
         }
 #endif
 
@@ -405,7 +411,6 @@ class Request {
     }
 
 #ifdef GRAFANA
-    std::vector<opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>>
-            spans;
+  std::vector<opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>> spans;
 #endif
 };

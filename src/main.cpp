@@ -27,6 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <utility>
+#include "config.h"
 
 unsigned long long Request::request_id = 0;
 unsigned long long Request::done_count = 0;
@@ -116,9 +117,14 @@ int main(int argc, char **argv) {
 
   std::string output_file;
   parse_cmd_args(argc, argv, config, output_file);
-
-  auto logHandler =
+  std::unique_ptr<DoneRequestHandler> logHandler;
+  #ifdef GRAFANA
+  logHandler =
+      std::unique_ptr<DoneRequestHandler>(new GrafanaClientLogHandler(output_file));
+  #else
+  logHandler =
       std::unique_ptr<DoneRequestHandler>(new FileLogHandler(output_file));
+  #endif
   tracer = new IOTracer(std::move(logHandler), std::move(config));
   tracer->start();
   return 0;
